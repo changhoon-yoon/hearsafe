@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🧭 DOA 실시간 나침반</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#131a22; --line:#263140; --txt:#e6edf3; --sub:#8b98a8;
+    --acc:#4dabf7; --hot:#ff6b6b; --ok:#51cf66; --gold:#ffd43b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 800px at 50% 30%,#101823 0%,var(--bg) 60%);
+    color:var(--txt);font-family:"Segoe UI","Malgun Gothic",sans-serif;min-height:100vh}
+  .top{display:flex;align-items:center;gap:14px;padding:16px 22px;border-bottom:1px solid var(--line)}
+  .top h1{font-size:1.15rem;margin:0;flex:1}
+  .status{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--sub)}
+  .dot{width:10px;height:10px;border-radius:50%;background:#555;transition:.3s}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .dot.listen{background:var(--acc);box-shadow:0 0 10px var(--acc);animation:blink 1.2s infinite}
+  @keyframes blink{50%{opacity:.35}}
+  button{background:#1b2836;color:var(--txt);border:1px solid var(--line);border-radius:9px;
+    padding:9px 18px;font-size:.9rem;cursor:pointer;font-family:inherit}
+  button:hover{background:#24344a;border-color:var(--acc)}
+  button.primary{background:var(--acc);color:#04121f;font-weight:700;border:none}
+  button.primary:hover{background:#74c0fc}
+  .wrap{display:flex;flex-wrap:wrap;gap:20px;padding:22px;max-width:1150px;margin:0 auto;justify-content:center}
+  .dial-card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px;
+    display:flex;flex-direction:column;align-items:center;gap:10px}
+  .readout{text-align:center;min-height:74px}
+  .readout .dir{font-size:2rem;font-weight:800;letter-spacing:1px}
+  .readout .deg{font-size:1rem;color:var(--sub)}
+  .readout .idle{font-size:1.1rem;color:var(--sub)}
+  .side{display:flex;flex-direction:column;gap:16px;width:330px;min-width:280px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .card h2{font-size:.95rem;margin:0 0 10px;color:var(--sub);font-weight:600}
+  .log{list-style:none;margin:0;padding:0;max-height:340px;overflow-y:auto}
+  .log li{display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid #1c2530;font-size:.9rem}
+  .log li:first-child{background:#18222e;border-radius:8px}
+  .log .t{color:var(--sub);font-size:.75rem;width:64px}
+  .log .a{font-weight:700;width:100px}
+  .log .bar{flex:1;height:6px;background:#1c2530;border-radius:3px;overflow:hidden}
+  .log .bar>div{height:100%;background:linear-gradient(90deg,var(--acc),var(--hot));border-radius:3px}
+  .hint{font-size:.8rem;color:var(--sub);line-height:1.6}
+  .hint code{background:#0b1020;padding:1px 6px;border-radius:5px;color:#ffa657}
+  svg{display:block}
+  #arrowG{transition:transform .15s cubic-bezier(.25,.9,.35,1)}
+  #pulse{opacity:0}
+  .pulse-anim{animation:pulse 1s ease-out}
+  @keyframes pulse{0%{opacity:.85;r:40}100%{opacity:0;r:190}}
+  #arrow{transition:opacity .8s}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>🧭 DOA 실시간 나침반 <span style="color:var(--sub);font-size:.8rem;font-weight:400">ESP32-S3 · 4-mic 십자 배열</span></h1>
+  <div class="status"><div class="dot" id="dot"></div><span id="statusTxt">연결 안 됨</span></div>
+  <button class="primary" id="btnConnect">🔌 시리얼 연결</button>
+  <button id="btnDemo">🎬 데모</button>
+</div>
+
+<div class="wrap">
+  <!-- ===== 나침반 ===== -->
+  <div class="dial-card">
+    <svg width="440" height="440" viewBox="-220 -220 440 440">
+      <!-- 외곽 링 -->
+      <circle r="196" fill="#0e141c" stroke="#263140" stroke-width="2"/>
+      <circle r="160" fill="none" stroke="#1b2530" stroke-width="1"/>
+      <!-- 각도 눈금 -->
+      <g id="ticks" stroke="#33415580"></g>
+      <!-- 방위 라벨 (phi: 0=오른쪽 M2, 90=위 M3, 180=왼쪽 M1, 270=아래 M4) -->
+      <g font-family="Segoe UI" text-anchor="middle">
+        <text x="0" y="-172" fill="#8b98a8" font-size="13">M3 · 위 (90°)</text>
+        <text x="0" y="184" fill="#8b98a8" font-size="13">M4 · 아래 (270°)</text>
+        <text x="-168" y="5" fill="#8b98a8" font-size="13">M1</text>
+        <text x="168" y="5" fill="#8b98a8" font-size="13">M2</text>
+        <text x="-168" y="21" fill="#55637a" font-size="10">180°</text>
+        <text x="168" y="21" fill="#55637a" font-size="10">0°</text>
+      </g>
+      <!-- 이벤트 펄스 링 -->
+      <circle id="pulse" r="40" fill="none" stroke="var(--hot)" stroke-width="4"/>
+      <!-- 과거 이벤트 잔상 점 -->
+      <g id="ghosts"></g>
+      <!-- 화살표 (기본: 위쪽=phi90 방향) -->
+      <g id="arrowG">
+        <g id="arrow" opacity="0.25">
+          <path d="M0,-150 L26,-96 L9,-104 L9,60 L-9,60 L-9,-104 L-26,-96 Z"
+                fill="url(#agrad)" stroke="#74c0fc" stroke-width="1.5"/>
+        </g>
+      </g>
+      <circle r="14" fill="#131a22" stroke="#4dabf7" stroke-width="2"/>
+      <circle r="4" fill="#4dabf7"/>
+      <defs>
+        <linearGradient id="agrad" x1="0" y1="-150" x2="0" y2="60" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ff6b6b"/><stop offset=".55" stop-color="#4dabf7"/>
+          <stop offset="1" stop-color="#1b2836"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <div class="readout" id="readout"><div class="idle">… 소리 대기 중 …</div></div>
+  </div>
+
+  <!-- ===== 사이드 ===== -->
+  <div class="side">
+    <div class="card">
+      <h2>📋 이벤트 로그</h2>
+      <ul class="log" id="log"><li style="color:var(--sub)">아직 이벤트 없음</li></ul>
+    </div>
+    <div class="card">
+      <h2>ℹ️ 사용법</h2>
+      <div class="hint">
+        ① <code>pio device monitor</code>가 열려있으면 먼저 닫기 (COM3 독점)<br>
+        ② <b>🔌 시리얼 연결</b> → 목록에서 <code>COM3</code>(CH343) 선택<br>
+        ③ 박수/소리 → 화살표가 방향을 가리킴<br>
+        ④ 반응 없으면 보드 <b>RST</b> 버튼 한 번<br>
+        ※ Chrome / Edge에서만 동작 (Web Serial API)
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ---------- 눈금 ----------
+(function(){
+  const g = document.getElementById('ticks');
+  let h = '';
+  for (let a = 0; a < 360; a += 15) {
+    const r = a * Math.PI / 180, big = a % 45 === 0;
+    const r1 = big ? 182 : 189, r2 = 196;
+    h += `<line x1="${(Math.cos(r)*r1).toFixed(1)}" y1="${(Math.sin(r)*r1).toFixed(1)}"
+                x2="${(Math.cos(r)*r2).toFixed(1)}" y2="${(Math.sin(r)*r2).toFixed(1)}"
+                stroke-width="${big?2:1}"/>`;
+  }
+  g.innerHTML = h;
+})();
+
+// ---------- 상태 ----------
+const $ = id => document.getElementById(id);
+const arrowG = $('arrowG'), arrow = $('arrow'), pulse = $('pulse');
+const dot = $('dot'), statusTxt = $('statusTxt'), readout = $('readout'), logEl = $('log');
+let cumRot = 0;          // 누적 회전각 (최단 경로 회전용)
+let curPhi = 90;
+let fadeTimer = null;
+let logCount = 0;
+
+const DIR8 = ["오른쪽 ▶","↗ 우상","▲ 위","↖ 좌상","◀ 왼쪽","↙ 좌하","▼ 아래","↘ 우하"];
+const dir8 = phi => DIR8[Math.floor(((phi + 22.5) % 360) / 45)];
+
+// phi(수학 표준: 0°=오른쪽, 90°=위, 반시계) → 화면 회전각(시계방향, 화살표 기본=위)
+function showEvent(phi, strength) {
+  const target = 90 - phi;
+  let delta = ((target - (cumRot % 360)) % 360 + 540) % 360 - 180;
+  cumRot += delta;
+  curPhi = phi;
+  arrowG.style.transform = `rotate(${cumRot}deg)`;
+  arrow.style.opacity = '1';
+
+  // 펄스
+  pulse.classList.remove('pulse-anim'); void pulse.getBBox; // reflow
+  requestAnimationFrame(() => pulse.classList.add('pulse-anim'));
+
+  // 잔상 점 (최근 6개)
+  const gh = $('ghosts');
+  const rad = phi * Math.PI / 180;
+  const dotEl = document.createElementNS('http://www.w3.org/2000/svg','circle');
+  dotEl.setAttribute('cx', (Math.cos(rad)*170).toFixed(1));
+  dotEl.setAttribute('cy', (-Math.sin(rad)*170).toFixed(1));
+  dotEl.setAttribute('r', 5); dotEl.setAttribute('fill', '#ff6b6b99');
+  gh.appendChild(dotEl);
+  while (gh.children.length > 6) gh.removeChild(gh.firstChild);
+  [...gh.children].forEach((c,i)=>c.setAttribute('opacity', (0.25 + 0.75*i/gh.children.length).toFixed(2)));
+
+  // 읽기값
+  readout.innerHTML = `<div class="dir">${dir8(phi)}</div>
+                       <div class="deg">phi = ${phi.toFixed(1)}°${strength?` · 세기 ${fmtK(strength)}`:''}</div>`;
+
+  // 로그
+  if (logCount === 0) logEl.innerHTML = '';
+  const li = document.createElement('li');
+  const pct = strength ? Math.min(100, Math.max(6, (Math.log10(strength)-3.2)/3*100)) : 20;
+  li.innerHTML = `<span class="t">${new Date().toLocaleTimeString('ko-KR',{hour12:false})}</span>
+                  <span class="a">${dir8(phi)}</span>
+                  <span style="color:var(--sub);font-size:.8rem;width:46px">${phi.toFixed(0)}°</span>
+                  <span class="bar"><div style="width:${pct}%"></div></span>`;
+  logEl.prepend(li);
+  while (logEl.children.length > 30) logEl.removeChild(logEl.lastChild);
+  logCount++;
+
+  // 5초 뒤 화살표 흐려짐
+  clearTimeout(fadeTimer);
+  fadeTimer = setTimeout(() => {
+    arrow.style.opacity = '0.25';
+    readout.innerHTML = '<div class="idle">… 소리 대기 중 …</div>';
+  }, 5000);
+}
+const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'k' : v;
+
+// ---------- 시리얼 라인 파서 ----------
+function parseLine(line) {
+  if (line.includes('대기')) { setStatus('listen', '듣는 중…'); return; }
+  let m = line.match(/★.*phi=\s*([\d.]+).*?세기\s*([\d.]+)/);
+  if (m) { showEvent(parseFloat(m[1]), parseFloat(m[2])); return; }
+  if (line.includes('★') && line.includes('X축만')) {
+    if (line.includes('왼쪽')) showEvent(180, 0);
+    else if (line.includes('오른쪽')) showEvent(0, 0);
+    return;
+  }
+  if (line.includes('★') && line.includes('Y축만')) {
+    if (line.includes('위')) showEvent(90, 0);
+    else if (line.includes('아래')) showEvent(270, 0);
+  }
+}
+function setStatus(mode, txt) {
+  dot.className = 'dot' + (mode ? ' ' + mode : '');
+  statusTxt.textContent = txt;
+}
+
+// ---------- Web Serial ----------
+let port = null, keepReading = false;
+$('btnConnect').addEventListener('click', async () => {
+  if (port) { keepReading = false; try { await port.close(); } catch(e){} port = null;
+    setStatus('', '연결 안 됨'); $('btnConnect').textContent = '🔌 시리얼 연결'; return; }
+  if (!('serial' in navigator)) { alert('이 브라우저는 Web Serial을 지원하지 않습니다.\nChrome 또는 Edge에서 열어주세요.'); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch(e){}
+    setStatus('on', '연결됨 (COM)'); $('btnConnect').textContent = '⏹ 연결 해제';
+    keepReading = true;
+    readLoop();
+  } catch (e) {
+    port = null; setStatus('', '연결 실패: ' + e.message);
+  }
+});
+
+async function readLoop() {
+  const decoder = new TextDecoder('utf-8');
+  let buf = '';
+  while (port && keepReading && port.readable) {
+    const reader = port.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          parseLine(buf.slice(0, idx).trim());
+          buf = buf.slice(idx + 1);
+        }
+      }
+    } catch (e) {
+      setStatus('', '읽기 오류 — 재시도…');
+    } finally {
+      reader.releaseLock();
+    }
+  }
+}
+
+// ---------- 데모 모드 ----------
+let demoTimer = null;
+$('btnDemo').addEventListener('click', () => {
+  if (demoTimer) { clearInterval(demoTimer); demoTimer = null; $('btnDemo').textContent = '🎬 데모'; return; }
+  $('btnDemo').textContent = '⏹ 데모 중지';
+  setStatus('listen', '데모 실행 중');
+  const seq = [180, 0, 90, 270, 135, 315, 45, 225];
+  let i = 0;
+  demoTimer = setInterval(() => {
+    const phi = seq[i++ % seq.length] + (Math.random()*20 - 10);
+    showEvent((phi + 360) % 360, Math.pow(10, 4 + Math.random()*2.3));
+  }, 1800);
+});
+</script>
+</body>
+</html>

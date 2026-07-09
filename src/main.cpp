@@ -33,11 +33,12 @@ static float corr[64];
 #define MAF 8    // 빠른 이동평균 (LPF ≈ 2.6kHz)
 #define MAS 48   // 느린 이동평균 (LPF ≈ 550Hz) — 빼서 HPF 역할
 #define MAOFF ((MAS - MAF) / 2)   // 중심 정렬 오프셋 = 20
-//  이벤트 래치: 게이트를 넘는 순간부터 EVENT_FRAMES 동안을 한 "소리 이벤트"로 묶고,
-//  그중 rms가 가장 큰 프레임(=직접음)의 lag로 딱 1번 판정.
-//  (잔향 꼬리 프레임이 방향을 오염시키는 문제 해결)
-#define CONF_GATE    0.30f
-#define EVENT_FRAMES 15   // 이벤트 수집 길이 ≈ 15×21ms ≈ 320ms
+//  이벤트 래치: 양 축이 래치되는 즉시(또는 EVENT_FRAMES 초과 시) 판정 →
+//  이후 REFRACT_FRAMES 동안 새 이벤트 시작을 막아 잔향 꼬리 재발화 억제.
+//  (지연 최소화: 대부분 1~2프레임(~40ms) 안에 판정)
+#define CONF_GATE      0.30f
+#define EVENT_FRAMES   4    // 한 축만 잡혔을 때 다른 축을 기다리는 최대 프레임 (~85ms)
+#define REFRACT_FRAMES 10   // 판정 후 불응기 (~210ms) — 잔향 재발화 방지
 
 #define DEBUG_FRAMES 1   // 게이트 통과 프레임마다 rms/lag/conf 출력 (튜닝용)
 
@@ -45,6 +46,7 @@ static float corr[64];
 // (최대 rms 프레임은 잔향이 더 클 수 있어 직접음 보장이 안 됨 — 실측으로 확인)
 static bool  inEvent = false;
 static int   evCnt = 0;
+static int   refract = 0;               // 판정 후 남은 불응 프레임
 static bool  evHasX = false, evHasY = false;
 static float evRmsX = 0, evLagX = 0;    // evRms*는 표시용 최대 세기
 static float evRmsY = 0, evLagY = 0;
@@ -210,16 +212,20 @@ void loop() {
   // 유효 = 게이트+신뢰도 통과 & 물리적으로 가능한 lag (|lag| ≤ 8.4+여유).
   // (상관 창 가장자리(±MAXLAG)의 가짜 피크 배제)
   // 첫 유효 프레임 = 직접음 → 그 lag로 이벤트당 판정 1회.
+  if (refract > 0) refract--;
+
   bool validX = okX && fabsf(lagX) <= (float)MAXLAG - 1.5f;
   bool validY = okY && fabsf(lagY) <= (float)MAXLAG - 1.5f;
-  if (validX || validY) {
+  if ((validX || validY) && refract == 0) {
     if (!inEvent) { inEvent = true; evCnt = 0; evHasX = evHasY = false; evRmsX = evRmsY = 0; }
     if (validX) { if (!evHasX) { evLagX = lagX; evHasX = true; } if (rmsX > evRmsX) evRmsX = rmsX; }
     if (validY) { if (!evHasY) { evLagY = lagY; evHasY = true; } if (rmsY > evRmsY) evRmsY = rmsY; }
   }
 
-  if (inEvent && ++evCnt >= EVENT_FRAMES) {
+  // 판정 시점: 양 축 확보 즉시, 또는 한 축만 잡힌 채 EVENT_FRAMES 경과
+  if (inEvent && ((evHasX && evHasY) || ++evCnt >= EVENT_FRAMES)) {
     inEvent = false;
+    refract = REFRACT_FRAMES;
     bool hX = evHasX, hY = evHasY;
 
     // 성분: sin(theta) = tau * c / d.   +sx = 왼쪽 성분,  +sy = 위 성분
