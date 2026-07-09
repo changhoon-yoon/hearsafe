@@ -259,6 +259,25 @@ async function readLoop() {
   }
 }
 
+// ---------- SSE 중계 모드 (serve.py로 http 접속 시 자동 활성) ----------
+if (location.protocol.startsWith('http')) {
+  $('btnConnect').style.display = 'none';   // 시리얼은 서버가 담당
+  document.querySelector('.hint').innerHTML =
+    '📡 <b>서버 중계 모드</b> — PC의 <code>serve.py</code>가 COM3을 읽어 실시간 전송 중.<br>' +
+    '같은 WiFi면 iPad·폰 등 여러 기기에서 동시 시청 가능.<br>' +
+    '연결이 끊기면 자동 재접속합니다.';
+  const es = new EventSource('/events');
+  es.onopen = () => setStatus('on', '서버 연결됨');
+  es.onerror = () => setStatus('', '서버 재연결 중…');
+  es.onmessage = ev => {
+    try {
+      const line = JSON.parse(ev.data).line;
+      if (line.startsWith('::status::')) { setStatus('listen', line.slice(10).trim()); return; }
+      parseLine(line);
+    } catch (e) {}
+  };
+}
+
 // ---------- 데모 모드 ----------
 let demoTimer = null;
 $('btnDemo').addEventListener('click', () => {
