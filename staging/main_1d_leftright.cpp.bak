@@ -1,0 +1,150 @@
+// ============================================================
+//  DOA 센싱 노드 — 2단계+안정화: 좌/우 방향 (노이즈 억제)
+//  INMP441 ×2 (단일 I2S, L/R)  ·  ESP32-S3-WROOM-1
+//
+//  개선: ① 에너지 문턱 상향  ② 신뢰도 게이팅  ③ 시간투표(median)
+//        → 가만히 있을 때 헛방향(노이즈) 안 뜨게
+// ============================================================
+#include <Arduino.h>
+#include <driver/i2s.h>
+#include <math.h>
+#include "pins.h"
+
+#define FRAMES   1024
+static int32_t i2s_buf[FRAMES * 2];
+static float   Ls[FRAMES], Rs[FRAMES];
+
+static int   MAXLAG;
+static float corr[64];
+
+// ---- 안정화 파라미터 (튜닝 가능) ----
+#define ENERGY_GATE 11000.0f   // 이 RMS 미만이면 무시 (소음 스파이크보다 높게)
+#define CONF_GATE   0.25f      // 신뢰도 이 미만이면 노이즈로 간주
+#define HIST        7          // 시간투표 창 크기
+#define MIN_VOTES   3          // 이만큼 신뢰 프레임 모여야 방향 확정 (노이즈 억제 우선)
+
+static float histLag[HIST];
+static bool  histVal[HIST];
+static int   hi = 0;
+
+void setupI2S() {
+  i2s_config_t cfg = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+    .sample_rate = SAMPLE_RATE,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 8,
+    .dma_buf_len = 256,
+    .use_apll = false,
+    .tx_desc_auto_clear = false,
+    .fixed_mclk = 0
+  };
+  i2s_pin_config_t pins = {
+    .bck_io_num   = PIN_I2S_SCK,
+    .ws_io_num    = PIN_I2S_WS,
+    .data_out_num = I2S_PIN_NO_CHANGE,
+    .data_in_num  = PIN_I2S_SD
+  };
+  i2s_driver_install(I2S_PORT, &cfg, 0, NULL);
+  i2s_set_pin(I2S_PORT, &pins);
+  i2s_zero_dma_buffer(I2S_PORT);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+  MAXLAG = (int)ceilf(MIC_SPACING_M / SOUND_SPEED * SAMPLE_RATE) + 3;
+  if (MAXLAG > 30) MAXLAG = 30;
+  for (int i = 0; i < HIST; i++) histVal[i] = false;
+  Serial.println("\n=== DOA 2단계+안정화: 좌/우 방향 ===");
+  Serial.printf("간격=%.1fcm  최대지연=±%d  gate=%.0f  conf>=%.2f  투표=%d/%d\n",
+                MIC_SPACING_M * 100, MAXLAG, ENERGY_GATE, CONF_GATE, MIN_VOTES, HIST);
+  setupI2S();
+  Serial.println("소리를 좌/우에서 내보세요.\n");
+}
+
+void loop() {
+  size_t br = 0;
+  if (i2s_read(I2S_PORT, i2s_buf, sizeof(i2s_buf), &br, portMAX_DELAY) != ESP_OK) return;
+  int n = br / (sizeof(int32_t) * 2);
+  if (n < FRAMES) return;
+
+  // 분리 + DC 제거 + 에너지
+  double mL = 0, mR = 0;
+  for (int i = 0; i < n; i++) {
+    Ls[i] = (float)(i2s_buf[2 * i]     >> 8);
+    Rs[i] = (float)(i2s_buf[2 * i + 1] >> 8);
+    mL += Ls[i]; mR += Rs[i];
+  }
+  mL /= n; mR /= n;
+  double eng = 0;
+  for (int i = 0; i < n; i++) {
+    Ls[i] -= mL; Rs[i] -= mR;
+    eng += (double)Ls[i] * Ls[i] + (double)Rs[i] * Rs[i];
+  }
+  float rms = sqrtf(eng / (2.0 * n));
+
+  // 신뢰 프레임인지 판정 (에너지 + 신뢰도)
+  bool reliable = false;
+  float lagF = 0;
+  if (rms >= ENERGY_GATE) {
+    float best = -1e30f; int bestLag = 0;
+    for (int lag = -MAXLAG; lag <= MAXLAG; lag++) {
+      int a = (lag < 0) ? -lag : 0;
+      int b = (lag < 0) ? n : n - lag;
+      double s = 0;
+      for (int i = a; i < b; i++) s += (double)Ls[i] * Rs[i + lag];
+      corr[lag + MAXLAG] = (float)s;
+      if (s > best) { best = (float)s; bestLag = lag; }
+    }
+    float frac = 0;
+    int k = bestLag + MAXLAG;
+    if (k > 0 && k < 2 * MAXLAG) {
+      float A = corr[k - 1], B = corr[k], C = corr[k + 1];
+      float den = A - 2 * B + C;
+      if (fabsf(den) > 1e-3f) frac = 0.5f * (A - C) / den;
+    }
+    lagF = bestLag + frac;
+    double sum = 0; for (int i = 0; i <= 2 * MAXLAG; i++) sum += corr[i];
+    float mean = sum / (2 * MAXLAG + 1);
+    float conf = (best - mean) / (fabsf(best) + 1e-6f);
+    if (conf >= CONF_GATE) reliable = true;
+  }
+
+  // 시간투표 버퍼에 기록
+  histLag[hi] = lagF; histVal[hi] = reliable; hi = (hi + 1) % HIST;
+
+  // 유효표 수집
+  float vals[HIST]; int nv = 0;
+  for (int i = 0; i < HIST; i++) if (histVal[i]) vals[nv++] = histLag[i];
+
+  if (nv < MIN_VOTES) {
+    Serial.printf("… 대기 (rms=%.0f, 표=%d/%d) …\n", rms, nv, MIN_VOTES);
+    delay(40);
+    return;
+  }
+
+  // 중앙값(median)
+  for (int a = 1; a < nv; a++) {         // 삽입정렬
+    float v = vals[a]; int b = a - 1;
+    while (b >= 0 && vals[b] > v) { vals[b + 1] = vals[b]; b--; }
+    vals[b + 1] = v;
+  }
+  float medLag = vals[nv / 2];
+
+  // 방향 계산
+  float tau = medLag / (float)SAMPLE_RATE;
+  float sinv = tau * SOUND_SPEED / MIC_SPACING_M;
+  if (sinv > 1) sinv = 1; if (sinv < -1) sinv = -1;
+  float ang = asinf(sinv) * 180.0f / PI;
+
+  int pos = (int)roundf((-ang + 90.0f) / 180.0f * 40.0f);
+  if (pos < 0) pos = 0; if (pos > 40) pos = 40;
+  char bar[42]; memset(bar, '-', 41); bar[41] = 0; bar[20] = '|'; bar[pos] = 'O';
+
+  const char* side = (medLag > 0.3f) ? "◀ 왼쪽 " : (medLag < -0.3f) ? "오른쪽 ▶" : " 정면  ";
+  Serial.printf("%s  %5.0f°  (표%d/%d)  [%s]\n", side, fabsf(ang), nv, HIST, bar);
+  delay(40);
+}
