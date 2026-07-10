@@ -23,6 +23,8 @@ static float   Ly[FRAMES], Ry[FRAMES];
 
 static int   MAXLAG;
 static float corr[64];
+static float physicalLagX;
+static float physicalLagY;
 
 // ---- 안정화 파라미터 ----
 //  ※ 밴드패스(이동평균 차: MA8−MA48, 중심정렬 ≈ 550Hz~2.6kHz) 후 rms 기준.
@@ -36,11 +38,17 @@ static float corr[64];
 //  이벤트 래치: 양 축이 래치되는 즉시(또는 EVENT_FRAMES 초과 시) 판정 →
 //  이후 REFRACT_FRAMES 동안 새 이벤트 시작을 막아 잔향 꼬리 재발화 억제.
 //  (지연 최소화: 대부분 1~2프레임(~40ms) 안에 판정)
-#define CONF_GATE      0.30f
+#define CORR_GATE      0.35f // 정규화 상관 피크의 최소값
+#define CONF_GATE      0.12f // 주 피크와 사이드로브의 상대 분리도
+#define SIDEBAND_SKIP  2     // 주 피크 주변 메인로브는 2차 피크 탐색에서 제외
+#define LAG_MARGIN     0.75f // 보간/실측 오차를 허용하되 물리 한계를 크게 넘기지 않음
+#define VECTOR_MIN_NORM 0.20f
+#define VECTOR_MAX_NORM 1.20f
 #define EVENT_FRAMES   4    // 한 축만 잡혔을 때 다른 축을 기다리는 최대 프레임 (~85ms)
+#define AXIS_PAIR_MAX_FRAMES 1 // 두 축은 같은 프레임 또는 바로 다음 프레임까지만 결합
 #define REFRACT_FRAMES 10   // 판정 후 불응기 (~210ms) — 잔향 재발화 방지
 
-#define DEBUG_FRAMES 1   // 게이트 통과 프레임마다 rms/lag/conf 출력 (튜닝용)
+#define DEBUG_FRAMES 0   // 운영 중 시리얼/DMA 지연 방지. 보정할 때만 1로 변경
 
 // 이벤트 래치 상태 — 축별 "첫 유효 프레임"(=직접음)의 lag를 래치.
 // (최대 rms 프레임은 잔향이 더 클 수 있어 직접음 보장이 안 됨 — 실측으로 확인)
@@ -50,13 +58,17 @@ static int   refract = 0;               // 판정 후 남은 불응 프레임
 static bool  evHasX = false, evHasY = false;
 static float evRmsX = 0, evLagX = 0;    // evRms*는 표시용 최대 세기
 static float evRmsY = 0, evLagY = 0;
+static float evCorrX = 0, evCorrY = 0;
+static float evConfX = 0, evConfY = 0;
+static uint32_t evFrameX = 0, evFrameY = 0;
+static uint32_t frameNo = 0;
 
 // 시리얼 출력 throttle (delay() 대신 — DMA를 계속 비워야 X/Y가 정렬됨)
 static uint32_t lastPrint = 0;
 #define PRINT_MS 120
 
 // ---------------- I2S 초기화 (포트/핀 파라미터화) ----------------
-static void setupI2S(i2s_port_t port, int sck, int ws, int sd) {
+static bool setupI2S(i2s_port_t port, int sck, int ws, int sd) {
   i2s_config_t cfg = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = SAMPLE_RATE,
@@ -74,15 +86,22 @@ static void setupI2S(i2s_port_t port, int sck, int ws, int sd) {
     .bck_io_num = sck, .ws_io_num = ws,
     .data_out_num = I2S_PIN_NO_CHANGE, .data_in_num = sd
   };
-  i2s_driver_install(port, &cfg, 0, NULL);
-  i2s_set_pin(port, &pins);
-  i2s_zero_dma_buffer(port);
+  esp_err_t err = i2s_driver_install(port, &cfg, 0, NULL);
+  if (err == ESP_OK) err = i2s_set_pin(port, &pins);
+  if (err == ESP_OK) err = i2s_zero_dma_buffer(port);
+  if (err != ESP_OK) {
+    Serial.printf("{\"type\":\"error\",\"source\":\"i2s\",\"port\":%d,\"code\":%d}\n",
+                  (int)port, (int)err);
+    return false;
+  }
+  return true;
 }
 
 // ---------- 한 쌍 처리: 분리 → DC제거 → 상관 → 보간 → 신뢰도 ----------
 //  반환 = rms.  out_lagF = 서브샘플 지연(양수면 Left쪽에서 소리), out_ok = 신뢰 여부
 static float processPair(const int32_t* buf, float* L, float* R, int n,
-                         float& out_lagF, bool& out_ok, float& out_conf) {
+                         float& out_lagF, bool& out_ok, float& out_conf,
+                         float& out_peak) {
   for (int i = 0; i < n; i++) {
     L[i] = (float)(buf[2 * i]     >> 8);   // 32bit 슬롯 안의 24bit 데이터
     R[i] = (float)(buf[2 * i + 1] >> 8);
@@ -109,23 +128,29 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
     n = m;
   }
 
-  double eng = 0;
+  float eng = 0;
   for (int i = 0; i < n; i++)
-    eng += (double)L[i] * L[i] + (double)R[i] * R[i];
-  float rms = sqrtf((float)(eng / (2.0 * n)));
+    eng += L[i] * L[i] + R[i] * R[i];
+  float rms = sqrtf(eng / (2.0f * n));
 
-  out_ok = false; out_lagF = 0; out_conf = 0;
+  out_ok = false; out_lagF = 0; out_conf = 0; out_peak = 0;
   if (rms < ENERGY_GATE) return rms;        // 에너지 게이트
 
-  // 시간영역 상호상관
-  float best = -1e30f; int bestLag = 0;
+  // 정규화 시간영역 상호상관. 마이크별 레벨 차이와 lag별 겹침 길이 차이를 제거한다.
+  float best = -2.0f; int bestLag = 0;
   for (int lag = -MAXLAG; lag <= MAXLAG; lag++) {
     int a = (lag < 0) ? -lag : 0;
     int b = (lag < 0) ? n : n - lag;
-    double s = 0;
-    for (int i = a; i < b; i++) s += (double)L[i] * R[i + lag];
-    corr[lag + MAXLAG] = (float)s;
-    if (s > best) { best = (float)s; bestLag = lag; }
+    float s = 0, eL = 0, eR = 0;
+    for (int i = a; i < b; i++) {
+      float lv = L[i], rv = R[i + lag];
+      s += lv * rv; eL += lv * lv; eR += rv * rv;
+    }
+    float c = (eL > 1e-9f && eR > 1e-9f) ? s / sqrtf(eL * eR) : 0;
+    if (c > 1.0f) c = 1.0f;
+    if (c < -1.0f) c = -1.0f;
+    corr[lag + MAXLAG] = c;
+    if (c > best) { best = c; bestLag = lag; }
   }
 
   // 포물선 보간 → 서브샘플 정밀도
@@ -133,33 +158,72 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
   if (k > 0 && k < 2 * MAXLAG) {
     float A = corr[k - 1], B = corr[k], C = corr[k + 1];
     float den = A - 2 * B + C;
-    if (fabsf(den) > 1e-3f) frac = 0.5f * (A - C) / den;
+    if (fabsf(den) > 1e-6f) frac = 0.5f * (A - C) / den;
+    if (frac > 1.0f) frac = 1.0f;
+    if (frac < -1.0f) frac = -1.0f;
   }
   out_lagF = bestLag + frac;
 
-  // 신뢰도 = 피크가 평균보다 얼마나 튀는가
-  double sum = 0; for (int i = 0; i <= 2 * MAXLAG; i++) sum += corr[i];
-  float mean = (float)(sum / (2 * MAXLAG + 1));
-  out_conf = (best - mean) / (fabsf(best) + 1e-6f);
-  if (out_conf >= CONF_GATE) out_ok = true;
+  // 신뢰도 = 메인로브 밖에서 가장 큰 사이드로브와 주 피크의 상대 분리도.
+  float second = -2.0f;
+  for (int i = 0; i <= 2 * MAXLAG; i++) {
+    if (abs(i - k) <= SIDEBAND_SKIP) continue;
+    if (corr[i] > second) second = corr[i];
+  }
+  out_peak = best;
+  out_conf = (best - second) / (fabsf(best) + 1e-6f);
+  if (out_conf < 0) out_conf = 0;
+  if (out_conf > 1) out_conf = 1;
+  out_ok = best >= CORR_GATE && out_conf >= CONF_GATE;
   return rms;
 }
 
-// φ(0~360, 0°=오른쪽 · 90°=위 · 반시계) → 8방위
-static const char* compass(float deg) {
-  static const char* d8[8] = {
-    "오른쪽 ▶", "↗ 우상", "▲ 위  ", "↖ 좌상",
-    "◀ 왼쪽 ", "↙ 좌하", "▼ 아래", "↘ 우하"
-  };
-  int idx = (int)floorf((deg + 22.5f) / 45.0f) & 7;
-  return d8[idx];
+static float clampUnit(float v) {
+  return v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+}
+
+static void print2dEvent(uint32_t frame, float phi, float strength,
+                         float rmsX, float rmsY, float lagX, float lagY,
+                         float corrX, float corrY, float confX, float confY,
+                         float vectorNorm) {
+  Serial.printf(
+    "{\"type\":\"doa\",\"mode\":\"2d\",\"frame\":%lu,\"phi\":%.1f,"
+    "\"strength\":%.0f,\"rmsX\":%.0f,\"rmsY\":%.0f,\"lagX\":%.3f,\"lagY\":%.3f,"
+    "\"corrX\":%.3f,\"corrY\":%.3f,\"confX\":%.3f,\"confY\":%.3f,\"vectorNorm\":%.3f}\n",
+    (unsigned long)frame, phi, strength, rmsX, rmsY, lagX, lagY,
+    corrX, corrY, confX, confY, vectorNorm);
+}
+
+static void printAxisEvent(uint32_t frame, char axis, float lag, float strength,
+                           float rms, float corrPeak, float conf) {
+  float component = (lag / (float)SAMPLE_RATE) * SOUND_SPEED /
+                    (axis == 'x' ? MIC_SPACING_M : MIC_SPACING_Y);
+  float candidateA, candidateB;
+  if (axis == 'x') {
+    // sx는 왼쪽이 +이므로 화면 x성분 cos(phi)는 -sx다.
+    candidateA = acosf(clampUnit(-component)) * 180.0f / PI;
+    candidateB = fmodf(360.0f - candidateA, 360.0f);
+  } else {
+    candidateA = asinf(clampUnit(component)) * 180.0f / PI;
+    if (candidateA < 0) candidateA += 360.0f;
+    candidateB = 180.0f - candidateA;
+    if (candidateB < 0) candidateB += 360.0f;
+  }
+  Serial.printf(
+    "{\"type\":\"doa\",\"mode\":\"axis\",\"frame\":%lu,\"axis\":\"%c\","
+    "\"phi\":null,\"candidateA\":%.1f,\"candidateB\":%.1f,\"strength\":%.0f,\"rms\":%.0f,"
+    "\"lag\":%.3f,\"corr\":%.3f,\"conf\":%.3f}\n",
+    (unsigned long)frame, axis, candidateA, candidateB, strength, rms, lag, corrPeak, conf);
 }
 
 void setup() {
   Serial.begin(115200);
   delay(1500);
 
-  MAXLAG = (int)ceilf(MIC_SPACING_M / SOUND_SPEED * SAMPLE_RATE) + 3;
+  physicalLagX = MIC_SPACING_M / SOUND_SPEED * SAMPLE_RATE;
+  physicalLagY = MIC_SPACING_Y / SOUND_SPEED * SAMPLE_RATE;
+  float largestPhysicalLag = physicalLagX > physicalLagY ? physicalLagX : physicalLagY;
+  MAXLAG = (int)ceilf(largestPhysicalLag) + 3;
   if (MAXLAG > 30) MAXLAG = 30;
 
   Serial.println("\n=== DOA 3단계: 2D 십자 배열 (좌우 + 상하, 360°) ===");
@@ -167,16 +231,30 @@ void setup() {
                 MIC_SPACING_M * 100, PIN_I2S_SCK, PIN_I2S_WS, PIN_I2S_SD);
   Serial.printf("세로 dy=%.1fcm (I2S1 GPIO%d/%d/%d)\n",
                 MIC_SPACING_Y * 100, PIN_I2S_SCK_Y, PIN_I2S_WS_Y, PIN_I2S_SD_Y);
-  Serial.printf("최대지연=+-%d  gate=%.0f  conf>=%.2f  이벤트창=%d프레임\n",
-                MAXLAG, ENERGY_GATE, CONF_GATE, EVENT_FRAMES);
+  Serial.printf("물리지연 X=%.2f Y=%.2f samples  탐색=+-%d  gate=%.0f  corr>=%.2f conf>=%.2f\n",
+                physicalLagX, physicalLagY, MAXLAG, ENERGY_GATE, CORR_GATE, CONF_GATE);
 
-  setupI2S(I2S_PORT,   PIN_I2S_SCK,   PIN_I2S_WS,   PIN_I2S_SD);    // 가로 X
-  setupI2S(I2S_PORT_Y, PIN_I2S_SCK_Y, PIN_I2S_WS_Y, PIN_I2S_SD_Y);  // 세로 Y
+  bool i2sX = setupI2S(I2S_PORT,   PIN_I2S_SCK,   PIN_I2S_WS,   PIN_I2S_SD);
+  bool i2sY = setupI2S(I2S_PORT_Y, PIN_I2S_SCK_Y, PIN_I2S_WS_Y, PIN_I2S_SD_Y);
+  if (!i2sX || !i2sY) {
+    Serial.println("{\"type\":\"error\",\"source\":\"startup\",\"message\":\"I2S initialization failed\"}");
+    while (true) delay(1000);
+  }
+
+  Serial.printf(
+    "{\"type\":\"system\",\"sampleRate\":%d,\"frameSamples\":%d,"
+    "\"physicalLagX\":%.3f,\"physicalLagY\":%.3f,\"corrGate\":%.2f,\"confGate\":%.2f,"
+    "\"psram\":%s,\"psramBytes\":%u}\n",
+    SAMPLE_RATE, FRAMES, physicalLagX, physicalLagY, CORR_GATE, CONF_GATE,
+    psramFound() ? "true" : "false", (unsigned int)ESP.getPsramSize());
 
   Serial.println("\n[검증] M1쪽 톡톡→왼쪽 / M3쪽 톡톡→위 / 대각 박수→사분면\n");
 }
 
 void loop() {
+#if DEBUG_FRAMES
+  uint32_t loopStartedUs = micros();
+#endif
   size_t brX = 0, brY = 0;
   // 두 포트를 매 루프 비운다 (delay 금지 — 링버퍼 넘치면 X/Y 시간대가 어긋남)
   if (i2s_read(I2S_PORT,   bufX, sizeof(bufX), &brX, portMAX_DELAY) != ESP_OK) return;
@@ -184,14 +262,15 @@ void loop() {
   int nX = brX / (sizeof(int32_t) * 2);
   int nY = brY / (sizeof(int32_t) * 2);
   if (nX < FRAMES || nY < FRAMES) return;
+  uint32_t currentFrame = ++frameNo;
 
-  float lagX, lagY, confX, confY; bool okX, okY;
-  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX);
-  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY);
+  float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
+  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX);
+  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY);
 
-  // X쌍은 Left채널 마이크가 물리적으로 오른쪽에 장착됨 (4방향 실측으로 확인)
-  // → 부호 반전으로 보정. 이후 코드는 "+lagX = 왼쪽" 관례 그대로.
-  lagX = -lagX;
+  // 배선 부호와 중앙 음원에서 실측한 고정 지연 bias를 보정한다.
+  lagX = lagX * LAG_SIGN_X - LAG_OFFSET_X;
+  lagY = lagY * LAG_SIGN_Y - LAG_OFFSET_Y;
 
   // 프린트 사이 최대 rms 추적 (120ms 출력 주기 사이 피크를 놓치지 않게)
   static float pkX = 0, pkY = 0;
@@ -201,11 +280,11 @@ void loop() {
 #if DEBUG_FRAMES
   // 게이트 통과 프레임은 즉시 출력 (throttle 무시) — conf가 왜 떨어지는지 확인용
   if (rmsX >= ENERGY_GATE)
-    Serial.printf("  [X프레임] rms=%.0f lag=%+.2f conf=%.2f %s\n",
-                  rmsX, lagX, confX, okX ? "OK" : "탈락");
+    Serial.printf("  [X프레임] n=%lu rms=%.0f lag=%+.2f corr=%.2f conf=%.2f %s\n",
+                  (unsigned long)currentFrame, rmsX, lagX, corrX, confX, okX ? "OK" : "탈락");
   if (rmsY >= ENERGY_GATE)
-    Serial.printf("  [Y프레임] rms=%.0f lag=%+.2f conf=%.2f %s\n",
-                  rmsY, lagY, confY, okY ? "OK" : "탈락");
+    Serial.printf("  [Y프레임] n=%lu rms=%.0f lag=%+.2f corr=%.2f conf=%.2f %s\n",
+                  (unsigned long)currentFrame, rmsY, lagY, corrY, confY, okY ? "OK" : "탈락");
 #endif
 
   // ---- 이벤트 래치 ----
@@ -214,48 +293,74 @@ void loop() {
   // 첫 유효 프레임 = 직접음 → 그 lag로 이벤트당 판정 1회.
   if (refract > 0) refract--;
 
-  bool validX = okX && fabsf(lagX) <= (float)MAXLAG - 1.5f;
-  bool validY = okY && fabsf(lagY) <= (float)MAXLAG - 1.5f;
+  bool validX = okX && fabsf(lagX) <= physicalLagX + LAG_MARGIN;
+  bool validY = okY && fabsf(lagY) <= physicalLagY + LAG_MARGIN;
   if ((validX || validY) && refract == 0) {
-    if (!inEvent) { inEvent = true; evCnt = 0; evHasX = evHasY = false; evRmsX = evRmsY = 0; }
-    if (validX) { if (!evHasX) { evLagX = lagX; evHasX = true; } if (rmsX > evRmsX) evRmsX = rmsX; }
-    if (validY) { if (!evHasY) { evLagY = lagY; evHasY = true; } if (rmsY > evRmsY) evRmsY = rmsY; }
+    if (!inEvent) {
+      inEvent = true; evCnt = 0; evHasX = evHasY = false;
+      evRmsX = evRmsY = evCorrX = evCorrY = evConfX = evConfY = 0;
+    }
+    if (validX) {
+      if (!evHasX) {
+        evLagX = lagX; evCorrX = corrX; evConfX = confX;
+        evFrameX = currentFrame; evHasX = true;
+      }
+      if (rmsX > evRmsX) evRmsX = rmsX;
+    }
+    if (validY) {
+      if (!evHasY) {
+        evLagY = lagY; evCorrY = corrY; evConfY = confY;
+        evFrameY = currentFrame; evHasY = true;
+      }
+      if (rmsY > evRmsY) evRmsY = rmsY;
+    }
   }
 
-  // 판정 시점: 양 축 확보 즉시, 또는 한 축만 잡힌 채 EVENT_FRAMES 경과
-  if (inEvent && ((evHasX && evHasY) || ++evCnt >= EVENT_FRAMES)) {
+  // 서로 한 프레임 이내에 잡힌 축만 같은 음파 사건으로 결합한다.
+  uint32_t frameGap = evFrameX > evFrameY ? evFrameX - evFrameY : evFrameY - evFrameX;
+  bool pairReady = evHasX && evHasY && frameGap <= AXIS_PAIR_MAX_FRAMES;
+  if (inEvent && (pairReady || ++evCnt >= EVENT_FRAMES)) {
     inEvent = false;
     refract = REFRACT_FRAMES;
     bool hX = evHasX, hY = evHasY;
+
+    // 늦게 들어온 다른 축이나 물리적으로 불가능한 벡터는 2D로 합치지 않는다.
+    if (hX && hY && !pairReady) {
+      float qualityX = evCorrX * evConfX;
+      float qualityY = evCorrY * evConfY;
+      if (qualityX >= qualityY) hY = false; else hX = false;
+    }
 
     // 성분: sin(theta) = tau * c / d.   +sx = 왼쪽 성분,  +sy = 위 성분
     float sx = 0, sy = 0;
     if (hX) {
       sx = (evLagX / (float)SAMPLE_RATE) * SOUND_SPEED / MIC_SPACING_M;
-      sx = sx > 1.0f ? 1.0f : (sx < -1.0f ? -1.0f : sx);
     }
     if (hY) {
       sy = (evLagY / (float)SAMPLE_RATE) * SOUND_SPEED / MIC_SPACING_Y;
-      sy = sy > 1.0f ? 1.0f : (sy < -1.0f ? -1.0f : sy);
     }
 
     if (hX && hY) {
-      // 표시는 수학 표준(0°=오른쪽, 90°=위, 반시계) → x축에 -sx
-      float phi = atan2f(sy, -sx) * 180.0f / PI;
-      if (phi < 0) phi += 360.0f;
-
-      int pos = (int)roundf(phi / 360.0f * 31.0f);
-      if (pos < 0) pos = 0; if (pos > 31) pos = 31;
-      char bar[33]; memset(bar, '-', 32); bar[32] = 0; bar[pos] = 'O';
-
-      Serial.printf("★ %s  phi=%5.1f°  (세기 %.0f)  [%s]\n",
-                    compass(phi), phi, evRmsX > evRmsY ? evRmsX : evRmsY, bar);
+      float vectorNorm = sqrtf(sx * sx + sy * sy);
+      if (vectorNorm >= VECTOR_MIN_NORM && vectorNorm <= VECTOR_MAX_NORM) {
+        // 표시는 수학 표준(0°=오른쪽, 90°=위, 반시계) → x축에 -sx
+        float phi = atan2f(sy, -sx) * 180.0f / PI;
+        if (phi < 0) phi += 360.0f;
+        print2dEvent(currentFrame, phi, evRmsX > evRmsY ? evRmsX : evRmsY,
+                     evRmsX, evRmsY, evLagX, evLagY,
+                     evCorrX, evCorrY, evConfX, evConfY, vectorNorm);
+      } else {
+        float qualityX = evCorrX * evConfX;
+        float qualityY = evCorrY * evConfY;
+        if (qualityX >= qualityY)
+          printAxisEvent(currentFrame, 'x', evLagX, evRmsX, evRmsX, evCorrX, evConfX);
+        else
+          printAxisEvent(currentFrame, 'y', evLagY, evRmsY, evRmsY, evCorrY, evConfY);
+      }
     } else if (hX) {
-      const char* s = (evLagX > 0.3f) ? "◀ 왼쪽 " : (evLagX < -0.3f) ? "오른쪽 ▶" : " 정면  ";
-      Serial.printf("★ [X축만] %s  %4.0f°\n", s, fabsf(asinf(sx) * 180.0f / PI));
+      printAxisEvent(currentFrame, 'x', evLagX, evRmsX, evRmsX, evCorrX, evConfX);
     } else {
-      const char* s = (evLagY > 0.3f) ? "▲ 위  " : (evLagY < -0.3f) ? "▼ 아래" : " 중앙  ";
-      Serial.printf("★ [Y축만] %s  %4.0f°\n", s, fabsf(asinf(sy) * 180.0f / PI));
+      printAxisEvent(currentFrame, 'y', evLagY, evRmsY, evRmsY, evCorrY, evConfY);
     }
     return;
   }
@@ -265,7 +370,10 @@ void loop() {
   if (now - lastPrint < PRINT_MS) return;
   lastPrint = now;
   if (!inEvent) {
-    Serial.printf("… 대기 (피크rmsX=%.0f  피크rmsY=%.0f) …\n", pkX, pkY);
+#if DEBUG_FRAMES
+    Serial.printf("… 대기 (피크rmsX=%.0f 피크rmsY=%.0f loop=%luus) …\n",
+                  pkX, pkY, (unsigned long)(micros() - loopStartedUs));
+#endif
     pkX = pkY = 0;
   }
 }

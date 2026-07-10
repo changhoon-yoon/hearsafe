@@ -26,6 +26,14 @@
 #define MIC_SPACING_M 0.06f   // ★ 두 마이크 중심 간 거리(m). 실제 잰 값으로 수정! (예: 6cm=0.06)
 #define SOUND_SPEED   343.0f  // 음속 m/s
 
+// ---- 축별 실측 보정 ----
+// processPair()의 원시 lag에 먼저 SIGN을 곱하고, 중앙 음원에서 측정한 고정 bias를 뺀다.
+// 중앙에서 여러 번 측정한 lag 평균이 +0.18이라면 LAG_OFFSET_*를 0.18f로 설정한다.
+#define LAG_SIGN_X   -1.0f    // 현재 X쌍은 실장 방향이 채널 표기와 반대
+#define LAG_SIGN_Y    1.0f
+#define LAG_OFFSET_X  0.0f    // 단위: sample
+#define LAG_OFFSET_Y  0.0f
+
 // 배선 확인용:
 //   Mic #1 : L/R -> GND  => 왼쪽 채널 (Left)
 //   Mic #2 : L/R -> VDD  => 오른쪽 채널 (Right)

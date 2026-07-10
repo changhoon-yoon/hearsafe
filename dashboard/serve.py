@@ -9,6 +9,8 @@
 #  ※ COM3은 이 서버가 독점 — pio monitor / Web Serial 연결은 먼저 닫을 것
 #  ※ 첫 실행 시 Windows 방화벽 팝업 → "허용" 클릭 (iPad 접속에 필요)
 # ============================================================
+import argparse
+import ipaddress
 import json
 import os
 import queue
@@ -23,27 +25,43 @@ PORT = 8765
 COM = "COM3"
 BAUD = 115200
 HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "doa-compass.html")
+CLIENT_QUEUE_SIZE = 100
 
 clients = set()
 clients_lock = threading.Lock()
+latest_status = "::status:: 서버 시작됨 — 시리얼 연결 대기 중"
 
 
 def broadcast(line: str):
+    global latest_status
     with clients_lock:
+        if line.startswith("::status::"):
+            latest_status = line
         for q in list(clients):
             try:
                 q.put_nowait(line)
             except queue.Full:
-                pass
+                # 느린 화면에는 오래된 로그보다 최신 방향을 보여준다.
+                try:
+                    q.get_nowait()
+                    q.put_nowait(line)
+                except (queue.Empty, queue.Full):
+                    pass
 
 
 def serial_thread():
     """COM 포트를 계속 재시도하며 읽어서 전 클라이언트에 중계."""
     while True:
         try:
-            with serial.Serial(COM, BAUD, timeout=1) as sp:
-                sp.dtr = False  # 보드 리셋/다운로드 모드 방지
-                sp.rts = False
+            # 포트를 열기 전에 DTR/RTS를 내려 연결 순간의 보드 리셋을 피한다.
+            sp = serial.Serial()
+            sp.port = COM
+            sp.baudrate = BAUD
+            sp.timeout = 1
+            sp.dtr = False
+            sp.rts = False
+            sp.open()
+            with sp:
                 print(f"[serial] {COM} 연결됨")
                 broadcast("::status:: 시리얼 연결됨 — 듣는 중")
                 while True:
@@ -80,8 +98,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            q = queue.Queue(maxsize=500)
+            q = queue.Queue(maxsize=CLIENT_QUEUE_SIZE)
             with clients_lock:
+                q.put_nowait(latest_status)
                 clients.add(q)
             print(f"[sse] 시청자 접속: {self.client_address[0]} (총 {len(clients)}명)")
             try:
@@ -125,18 +144,47 @@ def lan_ips() -> list:
     finally:
         s.close()
     ips.discard("127.0.0.1")
-    return sorted(ips, key=lambda ip: (not ip.startswith("192.168."), ip))
+    def priority(ip: str):
+        addr = ipaddress.ip_address(ip)
+        if ip.startswith("192.168."):
+            return 0, ip
+        if addr.is_private:
+            return 1, ip
+        return 2, ip
+
+    return sorted(ips, key=priority)
+
+
+class Server(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="ESP32 DOA serial-to-SSE dashboard server")
+    parser.add_argument("--com", default=os.getenv("DOA_COM", COM), help="serial port (default: COM3)")
+    parser.add_argument("--baud", type=int, default=int(os.getenv("DOA_BAUD", BAUD)))
+    parser.add_argument("--port", type=int, default=int(os.getenv("DOA_PORT", PORT)))
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
+    args = parse_args()
+    COM, BAUD, PORT = args.com, args.baud, args.port
     threading.Thread(target=serial_thread, daemon=True).start()
     print("=" * 50)
     print("  🧭 DOA 대시보드 중계 서버")
     print(f"  PC   : http://localhost:{PORT}")
     for i, ip in enumerate(lan_ips()):
         tag = "iPad : " if i == 0 else "  또는 "
-        note = "   ← 같은 WiFi에서 이 주소" if ip.startswith("192.168.") else "   (VPN 주소일 수 있음)"
+        note = "   ← 같은 WiFi 후보" if ipaddress.ip_address(ip).is_private else "   (VPN 주소일 수 있음)"
         print(f"  {tag}http://{ip}:{PORT}{note}")
     print("  종료 : Ctrl+C")
     print("=" * 50)
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    server = Server(("0.0.0.0", PORT), Handler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[server] 종료")
+    finally:
+        server.server_close()

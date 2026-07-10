@@ -149,7 +149,9 @@ const DIR8 = ["오른쪽 ▶","↗ 우상","▲ 위","↖ 좌상","◀ 왼쪽","
 const dir8 = phi => DIR8[Math.floor(((phi + 22.5) % 360) / 45)];
 
 // phi(수학 표준: 0°=오른쪽, 90°=위, 반시계) → 화면 회전각(시계방향, 화살표 기본=위)
-function showEvent(phi, strength) {
+function showEvent(phi, strength, details = null) {
+  if (!Number.isFinite(phi)) return;
+  phi = ((phi % 360) + 360) % 360;
   const target = 90 - phi;
   let delta = ((target - (cumRot % 360)) % 360 + 540) % 360 - 180;
   cumRot += delta;
@@ -158,7 +160,7 @@ function showEvent(phi, strength) {
   arrow.style.opacity = '1';
 
   // 펄스
-  pulse.classList.remove('pulse-anim'); void pulse.getBBox; // reflow
+  pulse.classList.remove('pulse-anim'); void pulse.getBBox(); // reflow
   requestAnimationFrame(() => pulse.classList.add('pulse-anim'));
 
   // 잔상 점 (최근 6개)
@@ -173,8 +175,13 @@ function showEvent(phi, strength) {
   [...gh.children].forEach((c,i)=>c.setAttribute('opacity', (0.25 + 0.75*i/gh.children.length).toFixed(2)));
 
   // 읽기값
+  const confidence = details && details.mode === '2d'
+    ? Math.min(Number(details.confX), Number(details.confY))
+    : details ? Number(details.conf) : NaN;
+  const confidenceText = Number.isFinite(confidence) ? ` · 신뢰 ${Math.round(confidence * 100)}%` : '';
+  const modeText = details && details.mode === 'axis' ? ' · 단일 축' : '';
   readout.innerHTML = `<div class="dir">${dir8(phi)}</div>
-                       <div class="deg">phi = ${phi.toFixed(1)}°${strength?` · 세기 ${fmtK(strength)}`:''}</div>`;
+                       <div class="deg">phi = ${phi.toFixed(1)}°${strength?` · 세기 ${fmtK(strength)}`:''}${confidenceText}${modeText}</div>`;
 
   // 로그
   if (logCount === 0) logEl.innerHTML = '';
@@ -199,6 +206,36 @@ const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed
 
 // ---------- 시리얼 라인 파서 ----------
 function parseLine(line) {
+  // codex 펌웨어의 구조화 레코드. JSON이 아닌 기존 펌웨어 텍스트도 아래에서 계속 지원한다.
+  if (line.startsWith('{')) {
+    try {
+      const record = JSON.parse(line);
+      if (record.type === 'doa') {
+        if (record.phi !== null && record.phi !== undefined && Number.isFinite(Number(record.phi)))
+          showEvent(Number(record.phi), Number(record.strength) || 0, record);
+        else {
+          const a = Number(record.candidateA), b = Number(record.candidateB);
+          const candidates = Number.isFinite(a) && Number.isFinite(b)
+            ? ` · 후보 ${a.toFixed(0)}° / ${b.toFixed(0)}°` : '';
+          const axis = record.axis === 'x' ? 'X' : record.axis === 'y' ? 'Y' : '?';
+          const message = `${axis}축만 감지${candidates}`;
+          setStatus('listen', message);
+          readout.innerHTML = `<div class="idle">${message}</div>`;
+        }
+        return;
+      }
+      if (record.type === 'system') {
+        setStatus('listen', `듣는 중 · ${record.sampleRate || '?'} Hz`);
+        return;
+      }
+      if (record.type === 'error') {
+        setStatus('', `장치 오류: ${record.source || 'unknown'}`);
+        return;
+      }
+    } catch (e) {
+      // 불완전한 JSON 조각은 기존 텍스트 파서에서도 매치되지 않으므로 안전하게 무시된다.
+    }
+  }
   if (line.includes('대기')) { setStatus('listen', '듣는 중…'); return; }
   let m = line.match(/★.*phi=\s*([\d.]+).*?세기\s*([\d.]+)/);
   if (m) { showEvent(parseFloat(m[1]), parseFloat(m[2])); return; }
@@ -218,9 +255,14 @@ function setStatus(mode, txt) {
 }
 
 // ---------- Web Serial ----------
-let port = null, keepReading = false;
+let port = null, keepReading = false, activeReader = null, readTask = null;
 $('btnConnect').addEventListener('click', async () => {
-  if (port) { keepReading = false; try { await port.close(); } catch(e){} port = null;
+  if (port) {
+    keepReading = false;
+    try { if (activeReader) await activeReader.cancel(); } catch(e){}
+    try { if (readTask) await readTask; } catch(e){}
+    try { await port.close(); } catch(e){}
+    port = null; activeReader = null; readTask = null;
     setStatus('', '연결 안 됨'); $('btnConnect').textContent = '🔌 시리얼 연결'; return; }
   if (!('serial' in navigator)) { alert('이 브라우저는 Web Serial을 지원하지 않습니다.\nChrome 또는 Edge에서 열어주세요.'); return; }
   try {
@@ -229,7 +271,7 @@ $('btnConnect').addEventListener('click', async () => {
     try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch(e){}
     setStatus('on', '연결됨 (COM)'); $('btnConnect').textContent = '⏹ 연결 해제';
     keepReading = true;
-    readLoop();
+    readTask = readLoop();
   } catch (e) {
     port = null; setStatus('', '연결 실패: ' + e.message);
   }
@@ -240,6 +282,7 @@ async function readLoop() {
   let buf = '';
   while (port && keepReading && port.readable) {
     const reader = port.readable.getReader();
+    activeReader = reader;
     try {
       while (true) {
         const { value, done } = await reader.read();
@@ -255,6 +298,7 @@ async function readLoop() {
       setStatus('', '읽기 오류 — 재시도…');
     } finally {
       reader.releaseLock();
+      if (activeReader === reader) activeReader = null;
     }
   }
 }
