@@ -107,24 +107,36 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def lan_ip() -> str:
+def lan_ips() -> list:
+    """모든 IPv4 후보를 모아 사설 WiFi 대역(192.168.x) 우선으로 정렬.
+    (VPN 터널 주소(10.x, 100.x)가 기본 라우트를 차지해도 진짜 LAN IP를 보여주기 위함)"""
+    ips = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except Exception:
+        pass
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+        ips.add(s.getsockname()[0])
     except Exception:
-        return "127.0.0.1"
+        pass
     finally:
         s.close()
+    ips.discard("127.0.0.1")
+    return sorted(ips, key=lambda ip: (not ip.startswith("192.168."), ip))
 
 
 if __name__ == "__main__":
     threading.Thread(target=serial_thread, daemon=True).start()
-    ip = lan_ip()
     print("=" * 50)
     print("  🧭 DOA 대시보드 중계 서버")
     print(f"  PC   : http://localhost:{PORT}")
-    print(f"  iPad : http://{ip}:{PORT}   (같은 WiFi)")
+    for i, ip in enumerate(lan_ips()):
+        tag = "iPad : " if i == 0 else "  또는 "
+        note = "   ← 같은 WiFi에서 이 주소" if ip.startswith("192.168.") else "   (VPN 주소일 수 있음)"
+        print(f"  {tag}http://{ip}:{PORT}{note}")
     print("  종료 : Ctrl+C")
     print("=" * 50)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
