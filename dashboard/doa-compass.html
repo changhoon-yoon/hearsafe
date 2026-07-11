@@ -296,16 +296,24 @@ function parseLine(line) {
         }
         return;
       }
-      if (record.type === 'alert') {
-        // 위험 소리 분류 × 방향 융합 이벤트 — 모드와 무관하게 항상 표시
+      if (record.type === 'alert' || record.type === 'sound') {
+        // 분류 × 방향 융합 이벤트. alert(위험)는 항상, sound(일반)는 모든소리 모드에서만
+        if (record.type === 'sound' && dangerOnly) return;
         const phi = Number.isFinite(Number(record.phi)) ? Number(record.phi)
                   : Number(record.candidateA);
-        if (Number.isFinite(phi)) showEvent(phi, Number(record.strength) || 0, record);
-        const box = document.getElementById('classBox');
-        const approx = record.mode === 'axis' ? ' (근사)' : '';
-        box.innerHTML = `🚨 <b>${record.labelKo}</b> ${Math.round(record.score * 100)}%` +
-                        (Number.isFinite(phi) ? ` — 방향 ${phi.toFixed(0)}°${approx}` : '');
-        box.classList.add('danger');
+        if (Number.isFinite(phi)) {
+          // 종류가 밝혀졌으니 임시 '🔊 소리' 화살표는 라벨 화살표로 교체
+          const generic = activeArrows.get('🔊 소리');
+          if (generic) { generic.g.remove(); activeArrows.delete('🔊 소리'); }
+          showEvent(phi, Number(record.strength) || 0, record);
+        }
+        if (record.type === 'alert') {
+          const box = document.getElementById('classBox');
+          const approx = record.mode === 'axis' ? ' (근사)' : '';
+          box.innerHTML = `🚨 <b>${record.labelKo}</b> ${Math.round(record.score * 100)}%` +
+                          (Number.isFinite(phi) ? ` — 방향 ${phi.toFixed(0)}°${approx}` : '');
+          box.classList.add('danger');
+        }
         return;
       }
       if (record.type === 'class') {

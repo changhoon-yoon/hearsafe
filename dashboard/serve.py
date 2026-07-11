@@ -46,7 +46,13 @@ classifier = None   # main에서 초기화 (없어도 서버는 정상 동작)
 # 방향과 묶어 {"type":"alert"} 이벤트를 발행한다.
 recent_doa = collections.deque(maxlen=40)   # (time.time(), doa dict)
 DOA_FUSE_WINDOW = 2.0    # 분류 창(~1s) + 전송 지연을 덮는 결합 허용 시간
-ALERT_MIN_SCORE = 0.30   # 이 점수 이상 위험 분류일 때만 alert
+ALERT_MIN_SCORE = 0.30   # 이 점수 이상 분류일 때만 방향과 융합
+# 방향 화살표를 만들 필요가 없는 배경/무음 라벨
+IGNORE_LABELS = {
+    "Silence", "Inside, small room", "Inside, large room or hall",
+    "Outside, rural or natural", "Outside, urban or manmade",
+    "White noise", "Pink noise", "Static", "Environmental noise", "Hum",
+}
 
 
 def remember_doa(line: str):
@@ -59,12 +65,13 @@ def remember_doa(line: str):
 
 
 def on_class_result(payload):
-    """분류기 콜백: 결과를 중계하고, 위험 소리면 최근 방향과 융합해 alert 발행."""
+    """분류기 콜백: 결과를 중계하고, 인식된 소리를 최근 방향과 융합해 발행.
+    위험 소리 → type=alert, 일반 소리 → type=sound (대시보드가 모드에 따라 표시)."""
     broadcast(json.dumps(payload, ensure_ascii=False))
     if payload.get("type") != "class":
         return
     top = payload["top"][0]
-    if not top.get("danger") or top["score"] < ALERT_MIN_SCORE:
+    if top["label"] in IGNORE_LABELS or top["score"] < ALERT_MIN_SCORE:
         return
     now = time.time()
     cands = [(t, r) for (t, r) in list(recent_doa) if now - t <= DOA_FUSE_WINDOW]
@@ -78,15 +85,16 @@ def on_class_result(payload):
     if best is None:
         best = cands[-1]
     t, r = best
-    alert = {
-        "type": "alert",
+    fused = {
+        "type": "alert" if top.get("danger") else "sound",
         "label": top["label"], "labelKo": top["labelKo"], "score": top["score"],
+        "danger": bool(top.get("danger")),
         "phi": r.get("phi"), "mode": r.get("mode"),
         "candidateA": r.get("candidateA"), "candidateB": r.get("candidateB"),
         "strength": r.get("strength"), "ageMs": int((now - t) * 1000),
     }
-    broadcast(json.dumps(alert, ensure_ascii=False))
-    print(f"[alert] {top['labelKo']} {top['score']:.2f} → phi={r.get('phi')} ({r.get('mode')})")
+    broadcast(json.dumps(fused, ensure_ascii=False))
+    print(f"[{fused['type']}] {top['labelKo']} {top['score']:.2f} → phi={r.get('phi')} ({r.get('mode')})")
 
 
 def broadcast(line: str):
