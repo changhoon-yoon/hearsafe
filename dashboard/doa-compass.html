@@ -52,7 +52,11 @@
   #pulse{opacity:0}
   .pulse-anim{animation:pulse 1s ease-out}
   @keyframes pulse{0%{opacity:.85;r:40}100%{opacity:0;r:190}}
-  #arrow{transition:opacity .8s}
+  #arrow{display:none}   /* 구 단일 화살표 — 소리별 다중 화살표로 대체됨 */
+  .evTag{font-family:"Segoe UI","Malgun Gothic",sans-serif;font-weight:700;
+    paint-order:stroke;stroke:#0b0f14;stroke-width:4px;fill:#e6edf3}
+  .evCd{font-family:Consolas,monospace;paint-order:stroke;stroke:#0b0f14;
+    stroke-width:3px;fill:#8b98a8}
 </style>
 </head>
 <body>
@@ -87,6 +91,8 @@
       <circle id="pulse" r="40" fill="none" stroke="var(--hot)" stroke-width="4"/>
       <!-- 과거 이벤트 잔상 점 -->
       <g id="ghosts"></g>
+      <!-- 소리별 이벤트 화살표 (3초 카운트다운 페이드) -->
+      <g id="evArrows"></g>
       <!-- 화살표 (기본: 위쪽=phi90 방향) -->
       <g id="arrowG">
         <g id="arrow" opacity="0.25">
@@ -161,16 +167,69 @@ document.getElementById('btnFilter').addEventListener('click', () => {
 const DIR8 = ["오른쪽 ▶","↗ 우상","▲ 위","↖ 좌상","◀ 왼쪽","↙ 좌하","▼ 아래","↘ 우하"];
 const dir8 = phi => DIR8[Math.floor(((phi + 22.5) % 360) / 45)];
 
+// ---------- 소리별 이벤트 화살표 (3초 카운트다운 페이드) ----------
+const SVGNS = 'http://www.w3.org/2000/svg';
+const ARROW_TTL = 3000;          // 표시 유지 시간(ms)
+const ARROW_HOLD = 1000;         // 이 시간 동안은 완전 불투명, 이후 서서히 페이드
+const evArrowsG = $('evArrows');
+const activeArrows = new Map();  // labelKo → {g, shaft, path, tag, cd, expireAt}
+
+function spawnArrow(phi, label, danger) {
+  let a = activeArrows.get(label);
+  if (!a) {
+    const g = document.createElementNS(SVGNS, 'g');
+    const shaft = document.createElementNS(SVGNS, 'g');
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('d', 'M0,-118 L16,-80 L5,-87 L5,-18 L-5,-18 L-5,-87 L-16,-80 Z');
+    path.setAttribute('stroke-width', '1.5');
+    shaft.appendChild(path);
+    const tag = document.createElementNS(SVGNS, 'text');
+    tag.setAttribute('class', 'evTag');
+    tag.setAttribute('text-anchor', 'middle');
+    tag.setAttribute('font-size', '15');
+    const cd = document.createElementNS(SVGNS, 'text');
+    cd.setAttribute('class', 'evCd');
+    cd.setAttribute('text-anchor', 'middle');
+    cd.setAttribute('font-size', '11');
+    g.appendChild(shaft); g.appendChild(tag); g.appendChild(cd);
+    evArrowsG.appendChild(g);
+    a = { g, shaft, path, tag, cd };
+    activeArrows.set(label, a);
+  }
+  const rad = phi * Math.PI / 180;
+  const tx = Math.cos(rad) * 140, ty = -Math.sin(rad) * 140;   // 라벨 위치(화살촉 너머)
+  a.shaft.setAttribute('transform', `rotate(${90 - phi})`);    // SVG 회전: 시계방향 +
+  a.path.setAttribute('fill', danger ? '#ff6b6bd9' : '#4dabf7c9');
+  a.path.setAttribute('stroke', danger ? '#ffd6d6' : '#a5d8ff');
+  a.tag.setAttribute('x', tx.toFixed(1)); a.tag.setAttribute('y', (ty - 2).toFixed(1));
+  a.cd.setAttribute('x', tx.toFixed(1));  a.cd.setAttribute('y', (ty + 14).toFixed(1));
+  a.tag.textContent = label;
+  a.g.setAttribute('opacity', '1');
+  a.expireAt = performance.now() + ARROW_TTL;
+}
+
+setInterval(() => {
+  const now = performance.now();
+  for (const [key, a] of activeArrows) {
+    const rem = a.expireAt - now;
+    if (rem <= 0) { a.g.remove(); activeArrows.delete(key); continue; }
+    const fadeSpan = ARROW_TTL - ARROW_HOLD;
+    a.g.setAttribute('opacity', (rem < fadeSpan ? rem / fadeSpan : 1).toFixed(2));
+    a.cd.textContent = (rem / 1000).toFixed(1) + 's';
+  }
+}, 100);
+
 // phi(수학 표준: 0°=오른쪽, 90°=위, 반시계) → 화면 회전각(시계방향, 화살표 기본=위)
 function showEvent(phi, strength, details = null) {
   if (!Number.isFinite(phi)) return;
   phi = ((phi % 360) + 360) % 360;
-  const target = 90 - phi;
-  let delta = ((target - (cumRot % 360)) % 360 + 540) % 360 - 180;
-  cumRot += delta;
   curPhi = phi;
-  arrowG.style.transform = `rotate(${cumRot}deg)`;
-  arrow.style.opacity = '1';
+
+  // 소리 종류별 전용 화살표 (같은 종류가 또 나면 그 화살표가 이동+타이머 리셋)
+  const danger = !!(details && (details.danger || details.type === 'alert' ||
+                    (details.top && details.top[0] && details.top[0].danger)));
+  const label = (details && details.labelKo) ? details.labelKo : '🔊 소리';
+  spawnArrow(phi, label, danger);
 
   // 펄스
   pulse.classList.remove('pulse-anim'); void pulse.getBBox(); // reflow
@@ -211,7 +270,6 @@ function showEvent(phi, strength, details = null) {
   // 5초 뒤 화살표 흐려짐
   clearTimeout(fadeTimer);
   fadeTimer = setTimeout(() => {
-    arrow.style.opacity = '0.25';
     readout.innerHTML = '<div class="idle">… 소리 대기 중 …</div>';
   }, 5000);
 }
