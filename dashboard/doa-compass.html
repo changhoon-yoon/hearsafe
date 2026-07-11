@@ -31,6 +31,10 @@
   .readout .dir{font-size:2rem;font-weight:800;letter-spacing:1px}
   .readout .deg{font-size:1rem;color:var(--sub)}
   .readout .idle{font-size:1.1rem;color:var(--sub)}
+  .classbox{min-height:34px;padding:8px 18px;border-radius:10px;background:#1b2530;
+    border:1px solid var(--line);font-size:1.05rem;text-align:center;transition:.3s}
+  .classbox.danger{background:#3d1418;border-color:var(--hot);box-shadow:0 0 14px #ff6b6b44}
+  .classbox .sub2{color:var(--sub);font-size:.78em;margin-left:8px}
   .side{display:flex;flex-direction:column;gap:16px;width:330px;min-width:280px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
   .card h2{font-size:.95rem;margin:0 0 10px;color:var(--sub);font-weight:600}
@@ -99,6 +103,7 @@
       </defs>
     </svg>
     <div class="readout" id="readout"><div class="idle">… 소리 대기 중 …</div></div>
+    <div class="classbox" id="classBox">🔎 소리 분류: 준비 중…</div>
   </div>
 
   <!-- ===== 사이드 ===== -->
@@ -222,6 +227,25 @@ function parseLine(line) {
           setStatus('listen', message);
           readout.innerHTML = `<div class="idle">${message}</div>`;
         }
+        return;
+      }
+      if (record.type === 'class') {
+        const t = record.top && record.top[0];
+        if (t) {
+          const box = document.getElementById('classBox');
+          const others = (record.top.slice(1) || [])
+            .map(o => `${o.labelKo} ${Math.round(o.score * 100)}%`).join(' · ');
+          box.innerHTML = `🔎 <b>${t.labelKo}</b> ${Math.round(t.score * 100)}%` +
+                          (others ? `<span class="sub2">${others}</span>` : '');
+          box.classList.toggle('danger', !!t.danger);
+        }
+        return;
+      }
+      if (record.type === 'class_status') {
+        const box = document.getElementById('classBox');
+        box.innerHTML = record.ready
+          ? '🔎 소리 분류: <b>YAMNet 가동 중</b> — 소리를 내보세요'
+          : `🔎 소리 분류 비활성 (${record.error || '로딩 실패'})`;
         return;
       }
       if (record.type === 'system') {

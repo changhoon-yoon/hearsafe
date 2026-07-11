@@ -15,21 +15,30 @@ import json
 import os
 import queue
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import serial
 
+# Windows 콘솔/리다이렉트가 cp949일 때 이모지·한글 출력으로 죽지 않게
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 PORT = 8765
 COM = "COM3"
-BAUD = 115200
+BAUD = 921600   # 펌웨어 AUDIO_STREAM(오디오 스트리밍) 규격과 일치
 HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "doa-compass.html")
 CLIENT_QUEUE_SIZE = 100
 
 clients = set()
 clients_lock = threading.Lock()
 latest_status = "::status:: 서버 시작됨 — 시리얼 연결 대기 중"
+classifier = None   # main에서 초기화 (없어도 서버는 정상 동작)
 
 
 def broadcast(line: str):
@@ -69,8 +78,14 @@ def serial_thread():
                     if not raw:
                         continue
                     line = raw.decode("utf-8", errors="replace").strip()
-                    if line:
-                        broadcast(line)
+                    if not line:
+                        continue
+                    # 오디오 스트림은 브라우저로 중계하지 않고 분류기에만 공급 (대역폭 절약)
+                    if line.startswith('{"type":"audio"'):
+                        if classifier is not None:
+                            classifier.feed_line(line)
+                        continue
+                    broadcast(line)
         except Exception as e:
             print(f"[serial] {COM} 대기 중… ({e})")
             broadcast(f"::status:: 시리얼 대기 중 ({COM} 사용 불가 — 다른 프로그램이 잡고 있나?)")
@@ -165,12 +180,22 @@ def parse_args():
     parser.add_argument("--com", default=os.getenv("DOA_COM", COM), help="serial port (default: COM3)")
     parser.add_argument("--baud", type=int, default=int(os.getenv("DOA_BAUD", BAUD)))
     parser.add_argument("--port", type=int, default=int(os.getenv("DOA_PORT", PORT)))
+    parser.add_argument("--no-classify", action="store_true",
+                        help="YAMNet 소리 분류 끄기 (TF 미설치 환경 등)")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     COM, BAUD, PORT = args.com, args.baud, args.port
+    if not args.no_classify:
+        try:
+            from classifier import SoundClassifier
+            classifier = SoundClassifier(
+                on_result=lambda payload: broadcast(json.dumps(payload, ensure_ascii=False)))
+            print("[classify] 분류기 시작 (YAMNet은 백그라운드 로딩)")
+        except Exception as e:
+            print(f"[classify] 분류기 비활성: {e}")
     threading.Thread(target=serial_thread, daemon=True).start()
     print("=" * 50)
     print("  🧭 DOA 대시보드 중계 서버")

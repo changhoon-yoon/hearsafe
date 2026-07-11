@@ -13,6 +13,7 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 #include <math.h>
+#include "mbedtls/base64.h"
 #include "pins.h"
 
 #define FRAMES 1024
@@ -41,7 +42,9 @@ static float physicalLagY;
 #define CORR_GATE      0.35f // 정규화 상관 피크의 최소값
 #define CONF_GATE      0.12f // 주 피크와 사이드로브의 상대 분리도
 #define SIDEBAND_SKIP  2     // 주 피크 주변 메인로브는 2차 피크 탐색에서 제외
-#define LAG_MARGIN     0.75f // 보간/실측 오차를 허용하되 물리 한계를 크게 넘기지 않음
+#define LAG_MARGIN     1.5f  // 실측: M4 직접음 lagY가 -9.0~-9.41까지 나옴(물리한계 8.4).
+                             // 보간 오버슈트+간격 오차 감안해 0.75→1.5로 완화 (9.15에서 기각되던
+                             // 정상 '아래' 이벤트 복구). ±MAXLAG(12) 가장자리 가짜 피크는 여전히 차단.
 #define VECTOR_MIN_NORM 0.20f
 #define VECTOR_MAX_NORM 1.20f
 #define EVENT_FRAMES   4    // 한 축만 잡혔을 때 다른 축을 기다리는 최대 프레임 (~85ms)
@@ -49,6 +52,42 @@ static float physicalLagY;
 #define REFRACT_FRAMES 10   // 판정 후 불응기 (~210ms) — 잔향 재발화 방지
 
 #define DEBUG_FRAMES 0   // 운영 중 시리얼/DMA 지연 방지. 보정할 때만 1로 변경
+
+// ---- 오디오 스트리밍 (노트북 분류기용) ----
+//  M1(X쌍 Left) 원신호를 48kHz→16kHz로 데시메이션(3샘플 평균), 16bit로 축소해
+//  base64 JSON 라인으로 전송. DOA용 밴드패스와 별개의 "광대역 경로"라
+//  화재경보(≈3.1kHz) 같은 고음도 분류기에 그대로 전달된다.
+//  대역폭: ~975B/프레임 × 46.9프레임/s ≈ 46kB/s → 921600bps(92kB/s)의 ~50%.
+#define AUDIO_STREAM 1
+#define AUDIO_DECIM  3                       // 48k / 3 = 16k (YAMNet 입력 규격)
+#define SERIAL_BAUD  921600                  // 115200으론 오디오 전송 불가
+
+#if AUDIO_STREAM
+static int16_t       audioPcm[FRAMES / AUDIO_DECIM];
+static unsigned char audioB64[((FRAMES / AUDIO_DECIM) * 2 + 2) / 3 * 4 + 8];
+static uint32_t      audioSeq = 0;
+
+static void streamAudio(const int32_t* buf, int n) {
+  int m = n / AUDIO_DECIM;
+  for (int i = 0; i < m; i++) {
+    int32_t s = 0;
+    for (int k = 0; k < AUDIO_DECIM; k++)
+      s += buf[2 * (i * AUDIO_DECIM + k)] >> 8;   // M1 = Left 슬롯, 24bit
+    s = (s / AUDIO_DECIM) >> 8;                    // 24bit → 16bit
+    if (s > 32767) s = 32767;
+    if (s < -32768) s = -32768;
+    audioPcm[i] = (int16_t)s;
+  }
+  size_t olen = 0;
+  if (mbedtls_base64_encode(audioB64, sizeof(audioB64), &olen,
+                            (const unsigned char*)audioPcm,
+                            (size_t)m * 2) != 0) return;
+  Serial.printf("{\"type\":\"audio\",\"seq\":%lu,\"sr\":%d,\"n\":%d,\"data\":\"",
+                (unsigned long)audioSeq++, SAMPLE_RATE / AUDIO_DECIM, m);
+  Serial.write(audioB64, olen);
+  Serial.println("\"}");
+}
+#endif
 
 // 이벤트 래치 상태 — 축별 "첫 유효 프레임"(=직접음)의 lag를 래치.
 // (최대 rms 프레임은 잔향이 더 클 수 있어 직접음 보장이 안 됨 — 실측으로 확인)
@@ -217,7 +256,8 @@ static void printAxisEvent(uint32_t frame, char axis, float lag, float strength,
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.setTxBufferSize(4096);   // 오디오 라인(~1KB)을 논블로킹으로 — DMA 지연 방지
+  Serial.begin(SERIAL_BAUD);
   delay(1500);
 
   physicalLagX = MIC_SPACING_M / SOUND_SPEED * SAMPLE_RATE;
@@ -263,6 +303,10 @@ void loop() {
   int nY = brY / (sizeof(int32_t) * 2);
   if (nX < FRAMES || nY < FRAMES) return;
   uint32_t currentFrame = ++frameNo;
+
+#if AUDIO_STREAM
+  streamAudio(bufX, nX);   // M1 원신호(광대역) → 노트북 분류기
+#endif
 
   float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
   float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX);
