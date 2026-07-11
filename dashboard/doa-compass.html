@@ -60,6 +60,7 @@
 <div class="top">
   <h1>🧭 DOA 실시간 나침반 <span style="color:var(--sub);font-size:.8rem;font-weight:400">ESP32-S3 · 4-mic 십자 배열</span></h1>
   <div class="status"><div class="dot" id="dot"></div><span id="statusTxt">연결 안 됨</span></div>
+  <button id="btnFilter" title="켜면 사이렌·화재경보 등 위험 소리일 때만 화살표가 움직입니다">🚨 위험만: ON</button>
   <button class="primary" id="btnConnect">🔌 시리얼 연결</button>
   <button id="btnDemo">🎬 데모</button>
 </div>
@@ -149,6 +150,13 @@ let cumRot = 0;          // 누적 회전각 (최단 경로 회전용)
 let curPhi = 90;
 let fadeTimer = null;
 let logCount = 0;
+let dangerOnly = true;   // true면 위험 소리(alert)일 때만 화살표 동작
+
+document.getElementById('btnFilter').addEventListener('click', () => {
+  dangerOnly = !dangerOnly;
+  document.getElementById('btnFilter').textContent =
+    dangerOnly ? '🚨 위험만: ON' : '🔔 모든 소리: ON';
+});
 
 const DIR8 = ["오른쪽 ▶","↗ 우상","▲ 위","↖ 좌상","◀ 왼쪽","↙ 좌하","▼ 아래","↘ 우하"];
 const dir8 = phi => DIR8[Math.floor(((phi + 22.5) % 360) / 45)];
@@ -216,6 +224,7 @@ function parseLine(line) {
     try {
       const record = JSON.parse(line);
       if (record.type === 'doa') {
+        if (dangerOnly) return;   // 위험만 모드: 화살표는 alert(위험 분류 융합)에서만
         if (record.phi !== null && record.phi !== undefined && Number.isFinite(Number(record.phi)))
           showEvent(Number(record.phi), Number(record.strength) || 0, record);
         else {
@@ -227,6 +236,18 @@ function parseLine(line) {
           setStatus('listen', message);
           readout.innerHTML = `<div class="idle">${message}</div>`;
         }
+        return;
+      }
+      if (record.type === 'alert') {
+        // 위험 소리 분류 × 방향 융합 이벤트 — 모드와 무관하게 항상 표시
+        const phi = Number.isFinite(Number(record.phi)) ? Number(record.phi)
+                  : Number(record.candidateA);
+        if (Number.isFinite(phi)) showEvent(phi, Number(record.strength) || 0, record);
+        const box = document.getElementById('classBox');
+        const approx = record.mode === 'axis' ? ' (근사)' : '';
+        box.innerHTML = `🚨 <b>${record.labelKo}</b> ${Math.round(record.score * 100)}%` +
+                        (Number.isFinite(phi) ? ` — 방향 ${phi.toFixed(0)}°${approx}` : '');
+        box.classList.add('danger');
         return;
       }
       if (record.type === 'class') {

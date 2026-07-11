@@ -10,6 +10,7 @@
 #  ※ 첫 실행 시 Windows 방화벽 팝업 → "허용" 클릭 (iPad 접속에 필요)
 # ============================================================
 import argparse
+import collections
 import ipaddress
 import json
 import os
@@ -39,6 +40,53 @@ clients = set()
 clients_lock = threading.Lock()
 latest_status = "::status:: 서버 시작됨 — 시리얼 연결 대기 중"
 classifier = None   # main에서 초기화 (없어도 서버는 정상 동작)
+
+# ---- 분류(무슨 소리) × DOA(어느 방향) 융합 ----
+# 최근 DOA 이벤트를 기억해 두고, 위험 소리로 분류되는 순간 시간창 안의
+# 방향과 묶어 {"type":"alert"} 이벤트를 발행한다.
+recent_doa = collections.deque(maxlen=40)   # (time.time(), doa dict)
+DOA_FUSE_WINDOW = 2.0    # 분류 창(~1s) + 전송 지연을 덮는 결합 허용 시간
+ALERT_MIN_SCORE = 0.30   # 이 점수 이상 위험 분류일 때만 alert
+
+
+def remember_doa(line: str):
+    try:
+        rec = json.loads(line)
+        if rec.get("type") == "doa":
+            recent_doa.append((time.time(), rec))
+    except Exception:
+        pass
+
+
+def on_class_result(payload):
+    """분류기 콜백: 결과를 중계하고, 위험 소리면 최근 방향과 융합해 alert 발행."""
+    broadcast(json.dumps(payload, ensure_ascii=False))
+    if payload.get("type") != "class":
+        return
+    top = payload["top"][0]
+    if not top.get("danger") or top["score"] < ALERT_MIN_SCORE:
+        return
+    now = time.time()
+    cands = [(t, r) for (t, r) in list(recent_doa) if now - t <= DOA_FUSE_WINDOW]
+    if not cands:
+        return
+    best = None
+    for t, r in reversed(cands):            # 2D 판정 우선, 그다음 최신
+        if r.get("mode") == "2d":
+            best = (t, r)
+            break
+    if best is None:
+        best = cands[-1]
+    t, r = best
+    alert = {
+        "type": "alert",
+        "label": top["label"], "labelKo": top["labelKo"], "score": top["score"],
+        "phi": r.get("phi"), "mode": r.get("mode"),
+        "candidateA": r.get("candidateA"), "candidateB": r.get("candidateB"),
+        "strength": r.get("strength"), "ageMs": int((now - t) * 1000),
+    }
+    broadcast(json.dumps(alert, ensure_ascii=False))
+    print(f"[alert] {top['labelKo']} {top['score']:.2f} → phi={r.get('phi')} ({r.get('mode')})")
 
 
 def broadcast(line: str):
@@ -85,6 +133,8 @@ def serial_thread():
                         if classifier is not None:
                             classifier.feed_line(line)
                         continue
+                    if line.startswith('{"type":"doa"'):
+                        remember_doa(line)   # 분류×방향 융합용 기억
                     broadcast(line)
         except Exception as e:
             print(f"[serial] {COM} 대기 중… ({e})")
@@ -191,8 +241,7 @@ if __name__ == "__main__":
     if not args.no_classify:
         try:
             from classifier import SoundClassifier
-            classifier = SoundClassifier(
-                on_result=lambda payload: broadcast(json.dumps(payload, ensure_ascii=False)))
+            classifier = SoundClassifier(on_result=on_class_result)
             print("[classify] 분류기 시작 (YAMNet은 백그라운드 로딩)")
         except Exception as e:
             print(f"[classify] 분류기 비활성: {e}")
