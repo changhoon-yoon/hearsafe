@@ -39,6 +39,7 @@ CLIENT_QUEUE_SIZE = 100
 clients = set()
 clients_lock = threading.Lock()
 latest_status = "::status:: 서버 시작됨 — 시리얼 연결 대기 중"
+latest_class_status = None   # 마지막 class_status JSON — 늦게 접속한 브라우저에도 전달
 classifier = None   # main에서 초기화 (없어도 서버는 정상 동작)
 
 # ---- 분류(무슨 소리) × DOA(어느 방향) 융합 ----
@@ -67,6 +68,9 @@ def remember_doa(line: str):
 def on_class_result(payload):
     """분류기 콜백: 결과를 중계하고, 인식된 소리를 최근 방향과 융합해 발행.
     위험 소리 → type=alert, 일반 소리 → type=sound (대시보드가 모드에 따라 표시)."""
+    global latest_class_status
+    if payload.get("type") == "class_status":
+        latest_class_status = json.dumps(payload, ensure_ascii=False)
     broadcast(json.dumps(payload, ensure_ascii=False))
     if payload.get("type") != "class":
         return
@@ -174,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
             q = queue.Queue(maxsize=CLIENT_QUEUE_SIZE)
             with clients_lock:
                 q.put_nowait(latest_status)
+                if latest_class_status:   # YAMNet 준비 완료가 접속 전이었어도 상태 전달
+                    q.put_nowait(latest_class_status)
                 clients.add(q)
             print(f"[sse] 시청자 접속: {self.client_address[0]} (총 {len(clients)}명)")
             try:
@@ -253,6 +259,13 @@ if __name__ == "__main__":
             print("[classify] 분류기 시작 (YAMNet은 백그라운드 로딩)")
         except Exception as e:
             print(f"[classify] 분류기 비활성: {e}")
+            latest_class_status = json.dumps(
+                {"type": "class_status", "ready": False, "error": str(e)[:120]},
+                ensure_ascii=False)
+    else:
+        latest_class_status = json.dumps(
+            {"type": "class_status", "ready": False, "error": "--no-classify로 꺼짐"},
+            ensure_ascii=False)
     threading.Thread(target=serial_thread, daemon=True).start()
     print("=" * 50)
     print("  🧭 DOA 대시보드 중계 서버")
