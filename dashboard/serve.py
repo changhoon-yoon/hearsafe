@@ -80,15 +80,27 @@ def on_class_result(payload):
         return
     now = time.time()
     cands = [(t, r) for (t, r) in list(recent_doa) if now - t <= DOA_FUSE_WINDOW]
-    if not cands:
-        return
     best = None
     for t, r in reversed(cands):            # 2D 판정 우선, 그다음 최신
         if r.get("mode") == "2d":
             best = (t, r)
             break
-    if best is None:
+    if best is None and cands:
         best = cands[-1]
+    if best is None:
+        # 방향 정보가 없어도 위험 소리는 알림 자체를 놓치면 안 된다 (방향 없이 발행).
+        # 일반 소리는 화살표를 만들 수 없으므로 발행하지 않음.
+        if not top.get("danger"):
+            return
+        fused = {
+            "type": "alert",
+            "label": top["label"], "labelKo": top["labelKo"], "score": top["score"],
+            "danger": True, "phi": None, "mode": None,
+            "candidateA": None, "candidateB": None, "strength": None, "ageMs": None,
+        }
+        broadcast(json.dumps(fused, ensure_ascii=False))
+        print(f"[alert] {top['labelKo']} {top['score']:.2f} → 방향 없음")
+        return
     t, r = best
     fused = {
         "type": "alert" if top.get("danger") else "sound",
