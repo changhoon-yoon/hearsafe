@@ -19,6 +19,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import serial
@@ -197,9 +198,48 @@ class Handler(BaseHTTPRequestHandler):
                 with clients_lock:
                     clients.discard(q)
                 print(f"[sse] 시청자 종료: {self.client_address[0]} (총 {len(clients)}명)")
+        elif self.path.startswith("/register"):
+            # 사용자 소리 등록: 지금부터 sec초 동안 마이크 소리를 지문으로 저장
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            name = (qs.get("name") or [""])[0].strip()
+            sec = float((qs.get("sec") or ["6"])[0])
+            danger = (qs.get("danger") or ["0"])[0] in ("1", "true")
+            if classifier is None:
+                body = {"ok": False, "error": "분류기가 꺼져 있습니다 (--no-classify?)"}
+            elif not name:
+                body = {"ok": False, "error": "이름이 없습니다 (?name=...)"}
+            else:
+                ko = (qs.get("ko") or [""])[0].strip() or ("📌 " + name)
+                broadcast(f"::status:: 🎙 '{name}' 등록 녹음 중 — 지금 소리를 들려주세요!")
+                body = classifier.start_capture(name, ko, danger, min(max(sec, 2.0), 15.0))
+                broadcast("::status:: 시리얼 연결됨 — 듣는 중")
+            self._json(body)
+
+        elif self.path == "/customs":
+            items = [] if classifier is None else [
+                {"name": c["name"], "labelKo": c["labelKo"], "danger": c["danger"],
+                 "takes": len(c.get("embeddings", [])),
+                 "threshold": c.get("threshold", 0.72)}
+                for c in classifier.custom]
+            self._json({"ok": True, "sounds": items})
+
+        elif self.path.startswith("/unregister"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            name = (qs.get("name") or [""])[0].strip()
+            n = classifier.remove_custom(name) if (classifier and name) else 0
+            self._json({"ok": n > 0, "removed": n})
+
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _json(self, obj):
+        data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def log_message(self, *args):  # 기본 액세스 로그 끄기
         pass

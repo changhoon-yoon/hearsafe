@@ -68,6 +68,7 @@
   <div class="status"><div class="dot" id="dot"></div><span id="statusTxt">연결 안 됨</span></div>
   <button id="btnFilter" title="켜면 사이렌·화재경보 등 위험 소리일 때만 화살표가 움직입니다">🚨 위험만: ON</button>
   <button id="btnView" title="화살표 대신 시계 베젤처럼 방향 칸이 점등되는 뷰로 전환">⭕ 링 뷰</button>
+  <button id="btnReg" title="지금 나는 소리를 6초 녹음해 나만의 소리로 등록 (서버 모드 전용)">➕ 소리 등록</button>
   <button class="primary" id="btnConnect">🔌 시리얼 연결</button>
   <button id="btnDemo">🎬 데모</button>
 </div>
@@ -534,6 +535,22 @@ async function readLoop() {
     }
   }
 }
+
+// ---------- 사용자 소리 등록 (서버 모드 전용) ----------
+if (!location.protocol.startsWith('http')) $('btnReg').style.display = 'none';
+$('btnReg').addEventListener('click', async () => {
+  const name = prompt('등록할 소리 이름 (예: 밥솥 완료)');
+  if (!name) return;
+  const danger = confirm('위험 소리로 등록할까요?\n확인 = 위험(빨간 표시) · 취소 = 일반(파란 표시)');
+  alert('확인을 누른 직후 6초 동안 그 소리를 마이크에 들려주세요!\n(같은 이름으로 반복 등록하면 인식률이 좋아집니다)');
+  setStatus('listen', `🎙 "${name}" 녹음 중… 소리를 들려주세요`);
+  let r;
+  try { r = await (await fetch(`/register?name=${encodeURIComponent(name)}&sec=6&danger=${danger ? 1 : 0}`)).json(); }
+  catch (e) { r = { ok: false, error: String(e) }; }
+  alert(r.ok
+    ? `✅ "${name}" 등록 완료 — 테이크 ${r.takes}개 (녹음 세기 ${r.rms})\n이제 같은 소리를 다시 내서 인식되는지 확인해보세요.`
+    : `❌ 등록 실패: ${r.error}`);
+});
 
 // ---------- SSE 중계 모드 (serve.py로 http 접속 시 자동 활성) ----------
 if (location.protocol.startsWith('http')) {

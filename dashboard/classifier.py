@@ -10,6 +10,7 @@
 import base64
 import csv
 import json
+import os
 import threading
 import time
 
@@ -85,6 +86,11 @@ class SoundClassifier:
         self.model = None
         self.names = []
         self.fed = 0
+        # 사용자 소리 등록(few-shot 지문): 등록된 소리의 YAMNet 임베딩 목록
+        self.custom_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "custom_sounds.json")
+        self.custom = self._load_custom()
+        self.capture = None   # 등록 녹음 진행 상태
         threading.Thread(target=self._load, daemon=True).start()
 
     # ---------- 모델 로딩 (수십 초 걸릴 수 있어 백그라운드) ----------
@@ -119,6 +125,9 @@ class SoundClassifier:
             if self.buf.size > keep:
                 self.buf = self.buf[-keep:]
             self.fed += pcm.size
+            if self.capture is not None and self.capture["collected"] < self.capture["need"]:
+                self.capture["buf"].append(pcm)
+                self.capture["collected"] += pcm.size
 
     # ---------- 주기 분류 ----------
     def _worker(self):
@@ -129,9 +138,12 @@ class SoundClassifier:
                 if self.buf.size < need:
                     continue
                 x = self.buf[-need:].copy()
+            self._finalize_capture()
             try:
-                scores, _, _ = self.model(x)
+                scores, emb, _ = self.model(x)
                 mean = scores.numpy().mean(axis=0)
+                evec = emb.numpy().mean(axis=0)
+                evec = evec / (np.linalg.norm(evec) + 1e-9)
             except Exception as e:
                 print(f"[classify] 추론 오류: {e}")
                 continue
@@ -146,5 +158,100 @@ class SoundClassifier:
                     "score": round(float(mean[i]), 3),
                     "danger": ko in DANGER,
                 })
+            self._match_custom(evec, top)
             if top and top[0]["score"] >= MIN_SCORE:
                 self.on_result({"type": "class", "top": top})
+
+    # ---------- 사용자 소리 등록 (few-shot 임베딩 지문) ----------
+    def _load_custom(self):
+        try:
+            with open(self.custom_path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def _save_custom(self):
+        with open(self.custom_path, "w", encoding="utf-8") as f:
+            json.dump(self.custom, f, ensure_ascii=False)
+
+    def start_capture(self, name, label_ko, danger, seconds):
+        """seconds 동안 들어오는 오디오로 소리 지문을 만들어 저장 (블로킹).
+        같은 이름으로 반복 등록하면 테이크가 쌓여 인식률이 좋아진다."""
+        if not self.ready:
+            return {"ok": False, "error": "YAMNet이 아직 로딩 중입니다 — 잠시 후 다시"}
+        done = threading.Event()
+        cap = {"name": name, "labelKo": label_ko, "danger": danger,
+               "need": int(self.sr * seconds), "buf": [], "collected": 0,
+               "done": done, "result": None}
+        with self.lock:
+            if self.capture is not None:
+                return {"ok": False, "error": "다른 등록이 진행 중입니다"}
+            self.capture = cap
+        if not done.wait(seconds + 20):
+            with self.lock:
+                self.capture = None
+            return {"ok": False, "error": "오디오가 들어오지 않습니다 (시리얼 연결 확인)"}
+        return cap["result"]
+
+    def _finalize_capture(self):
+        """등록 녹음이 다 모였으면 임베딩 지문을 만들어 저장 (worker 스레드에서 실행)."""
+        with self.lock:
+            cap = self.capture
+            if cap is None or cap["collected"] < cap["need"]:
+                return
+            x = np.concatenate(cap["buf"])[:cap["need"]]
+            self.capture = None
+        rms = float(np.sqrt(np.mean(x * x)))
+        if rms < 0.003:
+            cap["result"] = {"ok": False,
+                             "error": f"소리가 너무 작습니다 (RMS {rms:.4f}) — 더 가까이/크게 다시"}
+            cap["done"].set()
+            return
+        try:
+            _, emb, _ = self.model(x)
+            v = emb.numpy().mean(axis=0)
+            v = (v / (np.linalg.norm(v) + 1e-9)).tolist()
+        except Exception as e:
+            cap["result"] = {"ok": False, "error": str(e)[:120]}
+            cap["done"].set()
+            return
+        entry = next((c for c in self.custom if c["name"] == cap["name"]), None)
+        if entry is None:
+            entry = {"name": cap["name"], "labelKo": cap["labelKo"],
+                     "danger": cap["danger"], "threshold": 0.72, "embeddings": []}
+            self.custom.append(entry)
+        entry["embeddings"] = (entry["embeddings"] + [v])[-10:]   # 테이크 최대 10개
+        entry["danger"] = cap["danger"]
+        self._save_custom()
+        print(f"[custom] '{cap['name']}' 등록 (테이크 {len(entry['embeddings'])}개, RMS {rms:.3f})")
+        cap["result"] = {"ok": True, "name": cap["name"],
+                         "takes": len(entry["embeddings"]), "rms": round(rms, 4)}
+        cap["done"].set()
+
+    def _match_custom(self, evec, top):
+        """현재 창 임베딩을 등록 지문들과 비교, 문턱 이상이면 top1로 삽입."""
+        best_sim, best_c = 0.0, None
+        for c in self.custom:
+            if not c.get("embeddings"):
+                continue
+            s = max(float(np.dot(evec, np.asarray(t, dtype=np.float32)))
+                    for t in c["embeddings"])
+            if s > best_sim:
+                best_sim, best_c = s, c
+        if best_c is None:
+            return
+        th = best_c.get("threshold", 0.72)
+        if best_sim >= th:
+            top.insert(0, {"label": best_c["name"], "labelKo": best_c["labelKo"],
+                           "score": round(best_sim, 3),
+                           "danger": bool(best_c.get("danger")), "custom": True})
+            del top[3:]
+        elif best_sim >= 0.55:
+            # 문턱 튜닝용: 아깝게 미달한 유사도를 서버 콘솔에 보여준다
+            print(f"[custom] {best_c['name']} 유사도 {best_sim:.2f} — 문턱 {th} 미달")
+
+    def remove_custom(self, name):
+        before = len(self.custom)
+        self.custom = [c for c in self.custom if c["name"] != name]
+        self._save_custom()
+        return before - len(self.custom)
