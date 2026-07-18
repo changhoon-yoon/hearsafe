@@ -57,13 +57,52 @@ IGNORE_LABELS = {
 }
 
 
+# ---- 지속 소음원 습관화 ----
+# 팬·공기청정기처럼 한 방향에서 쉬지 않고 나는 소리는 이벤트를 계속 발생시켜
+# 불응기를 점유하고(진짜 소리가 확률적으로 씹힘) 화살표를 도배한다.
+# 최근 10초에 같은 방향(±25°) 이벤트가 15회 이상이면 그 방향을 억제한다.
+# (박수 3~4회 세션은 ~8회 수준이라 억제되지 않음)
+doa_history = collections.deque(maxlen=300)   # (time, phi)
+HABIT_WINDOW = 10.0
+HABIT_ARC = 25.0
+HABIT_COUNT = 15
+_habit_notice = {}   # 방향(30° 구간) → 마지막 안내 시각
+
+
+def _angdiff(a, b):
+    d = abs(a - b) % 360.0
+    return d if d <= 180.0 else 360.0 - d
+
+
+def habituated(phi: float) -> bool:
+    now = time.time()
+    cnt = sum(1 for (t, p) in doa_history
+              if now - t <= HABIT_WINDOW and _angdiff(p, phi) <= HABIT_ARC)
+    if cnt < HABIT_COUNT:
+        return False
+    zone = int(phi // 30) * 30
+    if now - _habit_notice.get(zone, 0) > 30:
+        _habit_notice[zone] = now
+        print(f"[habit] 🔇 지속 소음 방향 억제 중: ~{phi:.0f}° ({cnt}회/10초)")
+        broadcast(f"::status:: 🔇 지속 소음 방향(~{phi:.0f}°) 자동 무시 중")
+    return True
+
+
 def remember_doa(line: str):
+    """doa 라인 처리: 습관화 판정 후 억제 여부를 돌려준다 (True=억제)."""
     try:
         rec = json.loads(line)
-        if rec.get("type") == "doa":
-            recent_doa.append((time.time(), rec))
+        if rec.get("type") != "doa":
+            return False
+        phi = rec.get("phi")
+        if isinstance(phi, (int, float)):
+            doa_history.append((time.time(), float(phi)))
+            if habituated(float(phi)):
+                return True
+        recent_doa.append((time.time(), rec))
     except Exception:
         pass
+    return False
 
 
 def on_class_result(payload):
@@ -177,7 +216,8 @@ def serial_thread():
                                 classifier.feed_line(line)
                             continue
                         if line.startswith('{"type":"doa"'):
-                            remember_doa(line)   # 분류×방향 융합용 기억
+                            if remember_doa(line):   # 지속 소음 방향이면 중계도 생략
+                                continue
                         broadcast(line)
                     now = time.time()
                     if now - last_lag_check >= 5.0:
