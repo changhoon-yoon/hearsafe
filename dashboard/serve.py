@@ -134,21 +134,45 @@ def serial_thread():
             with sp:
                 print(f"[serial] {COM} 연결됨")
                 broadcast("::status:: 시리얼 연결됨 — 듣는 중")
+                try:
+                    sp.set_buffer_size(rx_size=1 << 20)   # OS 수신 버퍼 넉넉히 (드롭 방지)
+                except Exception:
+                    pass
+                # ※ readline() 금지 — pyserial readline은 1바이트씩 읽어서
+                #   오디오 스트리밍(~60KB/s)을 못 따라가고, OS 버퍼에 데이터가
+                #   계속 쌓여 지연이 수 초씩 누적된다 (실측 5~10초). 일괄 읽기로 처리.
+                acc = bytearray()
+                last_lag_check = time.time()
                 while True:
-                    raw = sp.readline()
-                    if not raw:
+                    chunk = sp.read(sp.in_waiting or 1)
+                    if not chunk:
                         continue
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if not line:
-                        continue
-                    # 오디오 스트림은 브라우저로 중계하지 않고 분류기에만 공급 (대역폭 절약)
-                    if line.startswith('{"type":"audio"'):
-                        if classifier is not None:
-                            classifier.feed_line(line)
-                        continue
-                    if line.startswith('{"type":"doa"'):
-                        remember_doa(line)   # 분류×방향 융합용 기억
-                    broadcast(line)
+                    acc += chunk
+                    if len(acc) > 1_000_000:   # 개행 없는 비정상 폭주 방어
+                        del acc[:-4096]
+                    while True:
+                        nl = acc.find(b"\n")
+                        if nl < 0:
+                            break
+                        raw = acc[:nl]
+                        del acc[:nl + 1]
+                        line = raw.decode("utf-8", errors="replace").strip()
+                        if not line:
+                            continue
+                        # 오디오 스트림은 브라우저로 중계하지 않고 분류기에만 공급 (대역폭 절약)
+                        if line.startswith('{"type":"audio"'):
+                            if classifier is not None:
+                                classifier.feed_line(line)
+                            continue
+                        if line.startswith('{"type":"doa"'):
+                            remember_doa(line)   # 분류×방향 융합용 기억
+                        broadcast(line)
+                    now = time.time()
+                    if now - last_lag_check >= 5.0:
+                        last_lag_check = now
+                        lag = sp.in_waiting
+                        if lag > 16384:
+                            print(f"[serial] 경고: 수신 밀림 {lag}B (~{lag / 60000:.1f}초 지연)")
         except Exception as e:
             print(f"[serial] {COM} 대기 중… ({e})")
             broadcast(f"::status:: 시리얼 대기 중 ({COM} 사용 불가 — 다른 프로그램이 잡고 있나?)")

@@ -146,10 +146,14 @@ class SoundClassifier:
                 x = self.buf[-need:].copy()
             self._finalize_capture()
             try:
+                t0 = time.time()
                 scores, emb, _ = self.model(x)
                 mean = scores.numpy().mean(axis=0)
                 evec = emb.numpy().mean(axis=0)
                 evec = evec / (np.linalg.norm(evec) + 1e-9)
+                dt = time.time() - t0
+                if dt > 0.7:
+                    print(f"[classify] 추론 느림 {dt:.2f}s — CPU 부하 확인 (지연 원인 가능)")
             except Exception as e:
                 print(f"[classify] 추론 오류: {e}")
                 continue
