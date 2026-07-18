@@ -19,6 +19,8 @@ import numpy as np
 WINDOW_SEC = 0.975   # YAMNet 내부 프레이밍(0.96s)과 맞춘 분석 창
 HOP_SEC = 0.5        # 분류 주기
 MIN_SCORE = 0.10     # 이 미만 top1은 보고하지 않음 (침묵/애매)
+MATCH_MIN_RMS = 0.005   # 이보다 조용한 창은 등록 지문과 비교하지 않음 (침묵 오탐 방지)
+CAPTURE_MIN_RMS = 0.008  # 등록 시 최대 소리 1초 구간이 이보다 작으면 거부
 
 # AudioSet display_name → 한국어 라벨 (주요 관심 클래스만; 없으면 원문 표기)
 KO = {
@@ -162,7 +164,10 @@ class SoundClassifier:
                     "score": round(float(mean[i]), 3),
                     "danger": ko in DANGER,
                 })
-            self._match_custom(evec, top)
+            # 조용한 창은 지문 비교 자체를 건너뛴다 — 침묵 임베딩은 아무 지문과도
+            # 0.6~0.7쯤 나와서 문턱 언저리 오탐을 만든다 (실측된 문제)
+            if float(np.sqrt(np.mean(x * x))) >= MATCH_MIN_RMS:
+                self._match_custom(evec, top)
             if top and top[0]["score"] >= MIN_SCORE:
                 self.on_result({"type": "class", "top": top})
 
@@ -205,10 +210,18 @@ class SoundClassifier:
                 return
             x = np.concatenate(cap["buf"])[:cap["need"]]
             self.capture = None
+        # 녹음 전체가 아니라 "가장 큰 소리 1초 구간"만 지문으로 쓴다.
+        # 앞뒤 침묵/배경이 섞이면 지문이 '조용한 방'과 닮아져 상시 오탐 발생 (실측된 문제).
+        win = int(self.sr * 1.0)
+        if x.size > win:
+            c = np.concatenate([[0.0], np.cumsum(x.astype(np.float64) ** 2)])
+            seg = c[win:] - c[:-win]
+            s0 = int(np.argmax(seg))
+            x = x[s0:s0 + win]
         rms = float(np.sqrt(np.mean(x * x)))
-        if rms < 0.003:
+        if rms < CAPTURE_MIN_RMS:
             cap["result"] = {"ok": False,
-                             "error": f"소리가 너무 작습니다 (RMS {rms:.4f}) — 더 가까이/크게 다시"}
+                             "error": f"소리가 너무 작습니다 (최대구간 RMS {rms:.4f}) — 더 가까이/크게 다시"}
             cap["done"].set()
             return
         try:
