@@ -58,6 +58,7 @@
     paint-order:stroke;stroke:#0b0f14;stroke-width:4px;fill:#e6edf3}
   .evCd{font-family:Consolas,monospace;paint-order:stroke;stroke:#0b0f14;
     stroke-width:3px;fill:#8b98a8}
+  .ringSeg{fill:#101822;stroke:#2a3646;stroke-width:1.5}
 </style>
 </head>
 <body>
@@ -66,6 +67,7 @@
   <h1>🧭 DOA 실시간 나침반 <span style="color:var(--sub);font-size:.8rem;font-weight:400">ESP32-S3 · 4-mic 십자 배열</span></h1>
   <div class="status"><div class="dot" id="dot"></div><span id="statusTxt">연결 안 됨</span></div>
   <button id="btnFilter" title="켜면 사이렌·화재경보 등 위험 소리일 때만 화살표가 움직입니다">🚨 위험만: ON</button>
+  <button id="btnView" title="화살표 대신 시계 베젤처럼 방향 칸이 점등되는 뷰로 전환">⭕ 링 뷰</button>
   <button class="primary" id="btnConnect">🔌 시리얼 연결</button>
   <button id="btnDemo">🎬 데모</button>
 </div>
@@ -79,8 +81,19 @@
       <circle r="160" fill="none" stroke="#1b2530" stroke-width="1"/>
       <!-- 각도 눈금 -->
       <g id="ticks" stroke="#33415580"></g>
+      <!-- 링 뷰: 세그먼트 베젤 (⭕ 버튼으로 나침반과 전환) -->
+      <g id="ringView" style="display:none">
+        <g id="ringSegs"></g>
+        <g id="ringHist"></g>
+        <g font-family="Segoe UI" text-anchor="middle" fill="#55637a" font-size="11">
+          <text x="0" y="-124">M3 · 위 90°</text>
+          <text x="0" y="136">M4 · 아래 270°</text>
+          <text x="-124" y="4">M1 180°</text>
+          <text x="124" y="4">M2 0°</text>
+        </g>
+      </g>
       <!-- 방위 라벨 (phi: 0=오른쪽 M2, 90=위 M3, 180=왼쪽 M1, 270=아래 M4) -->
-      <g font-family="Segoe UI" text-anchor="middle">
+      <g id="compassLabels" font-family="Segoe UI" text-anchor="middle">
         <text x="0" y="-172" fill="#8b98a8" font-size="13">M3 · 위 (90°)</text>
         <text x="0" y="184" fill="#8b98a8" font-size="13">M4 · 아래 (270°)</text>
         <text x="-168" y="5" fill="#8b98a8" font-size="13">M1</text>
@@ -103,6 +116,12 @@
       </g>
       <circle r="14" fill="#131a22" stroke="#4dabf7" stroke-width="2"/>
       <circle r="4" fill="#4dabf7"/>
+      <!-- 링 뷰 중앙: 소리 아이콘 + 라벨 + 카운트다운 -->
+      <g id="ringCenter" style="display:none">
+        <text id="ringIcon" text-anchor="middle" x="0" y="-4" font-size="64"></text>
+        <text id="ringName" class="evTag" text-anchor="middle" x="0" y="46" font-size="23"></text>
+        <text id="ringCdTx" class="evCd" text-anchor="middle" x="0" y="72" font-size="14"></text>
+      </g>
       <defs>
         <linearGradient id="agrad" x1="0" y1="-150" x2="0" y2="60" gradientUnits="userSpaceOnUse">
           <stop offset="0" stop-color="#ff6b6b"/><stop offset=".55" stop-color="#4dabf7"/>
@@ -220,6 +239,106 @@ setInterval(() => {
   }
 }, 100);
 
+// ---------- 링 뷰 (세그먼트 베젤) ----------
+// 소리 방향의 칸이 점등(양옆은 은은하게)되고 3초 카운트다운 페이드.
+// 정확한 방향은 가는 잔상 눈금으로 30초간 남아 "아까 어디서 났는지" 확인 가능.
+const RING_N = 16, RING_R1 = 152, RING_R2 = 196;
+const RING_HIST_TTL = 30000;
+let viewMode = localStorage.getItem('doaView') || 'compass';
+const ringGlow = [];          // 칸 인덱스 → {el, expireAt, peak, color}
+let ringCenterEv = null;
+
+(function buildRing(){
+  const segs = $('ringSegs');
+  const pt = (r, a) => { const t = a*Math.PI/180;
+    return (Math.cos(t)*r).toFixed(2) + ',' + (-Math.sin(t)*r).toFixed(2); };
+  for (let i = 0; i < RING_N; i++) {
+    const half = 180/RING_N, c = i*360/RING_N, a0 = c-half, a1 = c+half;
+    const d = `M${pt(RING_R2,a0)} A${RING_R2},${RING_R2} 0 0 0 ${pt(RING_R2,a1)}` +
+              ` L${pt(RING_R1,a1)} A${RING_R1},${RING_R1} 0 0 1 ${pt(RING_R1,a0)} Z`;
+    const base = document.createElementNS(SVGNS, 'path');
+    base.setAttribute('d', d); base.setAttribute('class', 'ringSeg');
+    segs.appendChild(base);
+    const glow = document.createElementNS(SVGNS, 'path');
+    glow.setAttribute('d', d); glow.setAttribute('opacity', '0');
+    segs.appendChild(glow);
+    ringGlow.push({ el: glow, expireAt: 0, peak: 0, color: '#ff6b6b' });
+  }
+})();
+
+function spawnRing(phi, label, danger) {
+  const now = performance.now();
+  const color = danger ? '#ff6b6b' : '#4dabf7';
+  const idx = Math.round(phi / (360/RING_N)) % RING_N;
+  [[idx, 1], [(idx+1)%RING_N, 0.35], [(idx+RING_N-1)%RING_N, 0.35]].forEach(([k, peak]) => {
+    const s = ringGlow[k];
+    if (s.expireAt <= now || peak >= s.peak) { s.peak = peak; s.color = color; }
+    s.expireAt = Math.max(s.expireAt, now + ARROW_TTL);
+  });
+  const hist = $('ringHist');
+  const t = phi*Math.PI/180;
+  const ln = document.createElementNS(SVGNS, 'line');
+  ln.setAttribute('x1', (Math.cos(t)*(RING_R1+2)).toFixed(1));
+  ln.setAttribute('y1', (-Math.sin(t)*(RING_R1+2)).toFixed(1));
+  ln.setAttribute('x2', (Math.cos(t)*(RING_R2-2)).toFixed(1));
+  ln.setAttribute('y2', (-Math.sin(t)*(RING_R2-2)).toFixed(1));
+  ln.setAttribute('stroke', color); ln.setAttribute('stroke-width', '2.5');
+  ln.dataset.expireAt = now + RING_HIST_TTL;
+  hist.appendChild(ln);
+  while (hist.children.length > 8) hist.removeChild(hist.firstChild);
+  // 중앙: 아이콘 크게 + 라벨 + 카운트다운
+  const parts = label.split(' ');
+  let icon = parts[0], name = parts.slice(1).join(' ');
+  let isEmoji = false;
+  try { isEmoji = /\p{Extended_Pictographic}/u.test(icon); } catch(e) { isEmoji = name.length > 0; }
+  if (!isEmoji) { icon = '🔊'; name = label; }
+  $('ringIcon').textContent = icon;
+  $('ringName').textContent = name || label;
+  $('ringName').setAttribute('fill', danger ? '#ffb3b3' : '#e6edf3');
+  ringCenterEv = { expireAt: now + ARROW_TTL };
+}
+
+setInterval(() => {
+  const now = performance.now();
+  const fspan = ARROW_TTL - ARROW_HOLD;
+  for (const s of ringGlow) {
+    const rem = s.expireAt - now;
+    if (rem <= 0) { if (s.peak) { s.peak = 0; s.el.setAttribute('opacity', '0'); } continue; }
+    s.el.setAttribute('fill', s.color);
+    s.el.setAttribute('opacity', (0.92 * s.peak * (rem < fspan ? rem/fspan : 1)).toFixed(2));
+  }
+  for (const ln of [...$('ringHist').children]) {
+    const rem = Number(ln.dataset.expireAt) - now;
+    if (rem <= 0) { ln.remove(); continue; }
+    ln.setAttribute('opacity', (0.85 * rem / RING_HIST_TTL).toFixed(2));
+  }
+  if (ringCenterEv) {
+    const rem = ringCenterEv.expireAt - now;
+    if (rem <= 0) {
+      ringCenterEv = null;
+      $('ringIcon').textContent = ''; $('ringName').textContent = ''; $('ringCdTx').textContent = '';
+    } else {
+      $('ringCenter').setAttribute('opacity', (rem < fspan ? rem/fspan : 1).toFixed(2));
+      $('ringCdTx').textContent = (rem/1000).toFixed(1) + 's';
+    }
+  }
+}, 100);
+
+function applyView() {
+  const ring = viewMode === 'ring';
+  $('ringView').style.display = ring ? '' : 'none';
+  $('ringCenter').style.display = ring ? '' : 'none';
+  ['ticks', 'ghosts', 'evArrows', 'compassLabels'].forEach(id =>
+    $(id).style.display = ring ? 'none' : '');
+  $('btnView').textContent = ring ? '🧭 나침반 뷰' : '⭕ 링 뷰';
+}
+$('btnView').addEventListener('click', () => {
+  viewMode = viewMode === 'ring' ? 'compass' : 'ring';
+  localStorage.setItem('doaView', viewMode);
+  applyView();
+});
+applyView();
+
 // phi(수학 표준: 0°=오른쪽, 90°=위, 반시계) → 화면 회전각(시계방향, 화살표 기본=위)
 function showEvent(phi, strength, details = null) {
   if (!Number.isFinite(phi)) return;
@@ -231,6 +350,7 @@ function showEvent(phi, strength, details = null) {
                     (details.top && details.top[0] && details.top[0].danger)));
   const label = (details && details.labelKo) ? details.labelKo : '🔊 소리';
   spawnArrow(phi, label, danger);
+  spawnRing(phi, label, danger);
 
   // 펄스
   pulse.classList.remove('pulse-anim'); void pulse.getBBox(); // reflow
