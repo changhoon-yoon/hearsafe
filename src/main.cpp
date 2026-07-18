@@ -39,9 +39,20 @@ static float physicalLagY;
 //  이벤트 래치: 양 축이 래치되는 즉시(또는 EVENT_FRAMES 초과 시) 판정 →
 //  이후 REFRACT_FRAMES 동안 새 이벤트 시작을 막아 잔향 꼬리 재발화 억제.
 //  (지연 최소화: 대부분 1~2프레임(~40ms) 안에 판정)
-#define CORR_GATE      0.35f // 정규화 상관 피크의 최소값
-#define CONF_GATE      0.12f // 주 피크와 사이드로브의 상대 분리도
-#define SIDEBAND_SKIP  2     // 주 피크 주변 메인로브는 2차 피크 탐색에서 제외
+//  ---- GCC-PHAT (잔향 대응) ----
+//  시간영역 에너지 상관은 "가장 큰 에너지 경로"를 찾으므로, 임계거리(거실 ~0.5-1m)
+//  밖에서는 잔향이 직접음보다 커져 피크를 빼앗긴다. PHAT은 대역 내 각 주파수 빈의
+//  크기를 1로 정규화해 위상(시간차)만 투표시킨다 — 직접음의 시간차는 전 대역에서
+//  일관되어 표가 몰리고, 잔향/반사는 주파수마다 어긋나 흩어진다.
+//  USE_PHAT 0으로 내리면 기존 시간영역 상관으로 복귀 (게이트 값은 재조정 필요:
+//  구 방식 실측 기준 CORR_GATE 0.35 / CONF_GATE 0.12 / SIDEBAND_SKIP 2).
+#define USE_PHAT  1
+#define PHAT_K_LO 12       // ≈550Hz  (빈폭 = 48000/1024 = 46.875Hz)
+#define PHAT_K_HI 55       // ≈2600Hz — 6cm 간격의 공간 앨리어싱 한계 아래
+#define PHAT_STEP 0.125f   // lag 탐색 격자 (샘플) — 주파수영역 조향이라 임의 정밀도 가능
+#define CORR_GATE      0.28f // PHAT 코히어런스 피크 최소값 (1.0 = 완벽한 단일 경로)
+#define CONF_GATE      0.10f // 주 피크와 사이드로브의 상대 분리도
+#define SIDEBAND_SKIP  3     // 주 피크 ±3샘플(대역제한 메인로브)은 2차 피크 탐색에서 제외
 #define LAG_MARGIN     1.5f  // 실측: M4 직접음 lagY가 -9.0~-9.41까지 나옴(물리한계 8.4).
                              // 보간 오버슈트+간격 오차 감안해 0.75→1.5로 완화 (9.15에서 기각되던
                              // 정상 '아래' 이벤트 복구). ±MAXLAG(12) 가장자리 가짜 피크는 여전히 차단.
@@ -136,6 +147,57 @@ static bool setupI2S(i2s_port_t port, int sck, int ws, int sd) {
   return true;
 }
 
+#if USE_PHAT
+// ---------------- 1024점 radix-2 FFT (자체 구현 — 외부 라이브러리 불필요) ----------------
+#define FFT_N    1024
+#define FFT_LOG2 10
+static float    fftRe[FFT_N], fftIm[FFT_N];
+static float    twCos[FFT_N / 2], twSin[FFT_N / 2];
+static uint16_t bitrev[FFT_N];
+static float    phatUr[PHAT_K_HI - PHAT_K_LO + 1];   // 빈별 단위 위상벡터
+static float    phatUi[PHAT_K_HI - PHAT_K_LO + 1];
+static int      phatK[PHAT_K_HI - PHAT_K_LO + 1];
+static float    phatR[2 * 30 * 8 + 1];               // lag 격자 응답 (MAXLAG<=30 대비)
+
+static void fftInit() {
+  for (int i = 0; i < FFT_N / 2; i++) {
+    float a = -2.0f * (float)M_PI * i / FFT_N;
+    twCos[i] = cosf(a);
+    twSin[i] = sinf(a);
+  }
+  for (int i = 0; i < FFT_N; i++) {
+    uint16_t r = 0;
+    for (int b = 0; b < FFT_LOG2; b++)
+      if (i & (1 << b)) r |= 1 << (FFT_LOG2 - 1 - b);
+    bitrev[i] = r;
+  }
+}
+
+static void fft(float* re, float* im) {
+  for (int i = 0; i < FFT_N; i++) {
+    int j = bitrev[i];
+    if (j > i) {
+      float t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (int len = 2; len <= FFT_N; len <<= 1) {
+    int half = len >> 1, step = FFT_N / len;
+    for (int i = 0; i < FFT_N; i += len) {
+      for (int k = 0; k < half; k++) {
+        float wr = twCos[k * step], wi = twSin[k * step];
+        float xr = re[i + k + half], xi = im[i + k + half];
+        float tr = xr * wr - xi * wi, ti = xr * wi + xi * wr;
+        re[i + k + half] = re[i + k] - tr;
+        im[i + k + half] = im[i + k] - ti;
+        re[i + k] += tr;
+        im[i + k] += ti;
+      }
+    }
+  }
+}
+#endif
+
 // ---------- 한 쌍 처리: 분리 → DC제거 → 상관 → 보간 → 신뢰도 ----------
 //  반환 = rms.  out_lagF = 서브샘플 지연(양수면 Left쪽에서 소리), out_ok = 신뢰 여부
 static float processPair(const int32_t* buf, float* L, float* R, int n,
@@ -175,6 +237,85 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
   out_ok = false; out_lagF = 0; out_conf = 0; out_peak = 0;
   if (rms < ENERGY_GATE) return rms;        // 에너지 게이트
 
+#if USE_PHAT
+  // ---- 대역 제한 GCC-PHAT ----
+  // 필터된 n(=976)샘플 + 제로패딩 → 순환상관이 |lag|<=48까지 선형상관과 동일.
+  // L→실수부, R→허수부로 채워 복소 FFT 1회로 두 채널 스펙트럼을 동시에 얻는다.
+  for (int i = 0; i < n; i++) { fftRe[i] = L[i]; fftIm[i] = R[i]; }
+  for (int i = n; i < FFT_N; i++) { fftRe[i] = 0; fftIm[i] = 0; }
+  fft(fftRe, fftIm);
+
+  // 대역 빈만 추출해 크로스 스펙트럼의 단위 위상벡터를 만든다.
+  //  XL(k) = (Z(k)+Z*(N-k))/2,  XR(k) = -j(Z(k)-Z*(N-k))/2  (2채널 실수 FFT 언패킹)
+  int used = 0;
+  for (int k = PHAT_K_LO; k <= PHAT_K_HI; k++) {
+    float ar = fftRe[k],         ai = fftIm[k];
+    float br = fftRe[FFT_N - k], bi = fftIm[FFT_N - k];
+    float XLr = 0.5f * (ar + br), XLi = 0.5f * (ai - bi);
+    float XRr = 0.5f * (ai + bi), XRi = 0.5f * (br - ar);
+    float Gr = XLr * XRr + XLi * XRi;    // conj(XL)·XR — r(τ)=ΣL(t)R(t+τ) 규약과 동일,
+    float Gi = XLr * XRi - XLi * XRr;    // 피크 τ>0 = Left 먼저 도착 (부호 규약 유지)
+    float mag = sqrtf(Gr * Gr + Gi * Gi);
+    if (mag < 1e-6f) continue;
+    phatUr[used] = Gr / mag;
+    phatUi[used] = Gi / mag;
+    phatK[used] = k;
+    used++;
+  }
+  if (used < 8) return rms;   // 대역 내 신호 없음
+
+  // R(τ) = (1/M)·Σ Re(u_k·e^{jω_k τ}) 를 PHAT_STEP 격자에서 평가 (빈별 회전 점화식).
+  // 모든 위상이 정렬되면 1.0 — 피크값 자체가 "단일 경로 코히어런스" 품질 지표가 된다.
+  const int perSample = (int)(1.0f / PHAT_STEP + 0.5f);
+  const int nTau = 2 * MAXLAG * perSample + 1;
+  for (int t = 0; t < nTau; t++) phatR[t] = 0;
+  for (int b = 0; b < used; b++) {
+    float w = 2.0f * (float)M_PI * phatK[b] / FFT_N;
+    float th0 = -w * MAXLAG;
+    float c = cosf(th0), s = sinf(th0);
+    float dc = cosf(w * PHAT_STEP), ds = sinf(w * PHAT_STEP);
+    float vr = phatUr[b], vi = phatUi[b];
+    for (int t = 0; t < nTau; t++) {
+      phatR[t] += vr * c - vi * s;
+      float nc = c * dc - s * ds;
+      s = c * ds + s * dc;
+      c = nc;
+    }
+  }
+  float inv = 1.0f / used;
+  float best = -2.0f; int bestT = 0;
+  for (int t = 0; t < nTau; t++) {
+    phatR[t] *= inv;
+    if (phatR[t] > best) { best = phatR[t]; bestT = t; }
+  }
+
+  // 포물선 보간 (격자 0.125 → 그 이하 정밀도)
+  float frac = 0;
+  if (bestT > 0 && bestT < nTau - 1) {
+    float A = phatR[bestT - 1], B = phatR[bestT], C = phatR[bestT + 1];
+    float den = A - 2 * B + C;
+    if (fabsf(den) > 1e-9f) frac = 0.5f * (A - C) / den;
+    if (frac > 1.0f) frac = 1.0f;
+    if (frac < -1.0f) frac = -1.0f;
+  }
+  out_lagF = -MAXLAG + (bestT + frac) * PHAT_STEP;
+
+  // 신뢰도 = 메인로브(±SIDEBAND_SKIP샘플) 밖 최대 사이드로브와의 상대 분리도
+  float second = -2.0f;
+  const int skip = SIDEBAND_SKIP * perSample;
+  for (int t = 0; t < nTau; t++) {
+    int d = t - bestT; if (d < 0) d = -d;
+    if (d <= skip) continue;
+    if (phatR[t] > second) second = phatR[t];
+  }
+  out_peak = best;
+  out_conf = (best - second) / (fabsf(best) + 1e-6f);
+  if (out_conf < 0) out_conf = 0;
+  if (out_conf > 1) out_conf = 1;
+  out_ok = best >= CORR_GATE && out_conf >= CONF_GATE;
+  return rms;
+
+#else
   // 정규화 시간영역 상호상관. 마이크별 레벨 차이와 lag별 겹침 길이 차이를 제거한다.
   float best = -2.0f; int bestLag = 0;
   for (int lag = -MAXLAG; lag <= MAXLAG; lag++) {
@@ -215,6 +356,7 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
   if (out_conf > 1) out_conf = 1;
   out_ok = best >= CORR_GATE && out_conf >= CONF_GATE;
   return rms;
+#endif
 }
 
 static float clampUnit(float v) {
@@ -265,8 +407,16 @@ void setup() {
   float largestPhysicalLag = physicalLagX > physicalLagY ? physicalLagX : physicalLagY;
   MAXLAG = (int)ceilf(largestPhysicalLag) + 3;
   if (MAXLAG > 30) MAXLAG = 30;
+#if USE_PHAT
+  fftInit();
+#endif
 
   Serial.println("\n=== DOA 3단계: 2D 십자 배열 (좌우 + 상하, 360°) ===");
+#if USE_PHAT
+  Serial.printf("상관: GCC-PHAT %d~%dHz (빈 %d~%d), 격자 %.3f샘플\n",
+                PHAT_K_LO * SAMPLE_RATE / FFT_N, PHAT_K_HI * SAMPLE_RATE / FFT_N,
+                PHAT_K_LO, PHAT_K_HI, PHAT_STEP);
+#endif
   Serial.printf("가로 dx=%.1fcm (I2S0 GPIO%d/%d/%d)\n",
                 MIC_SPACING_M * 100, PIN_I2S_SCK, PIN_I2S_WS, PIN_I2S_SD);
   Serial.printf("세로 dy=%.1fcm (I2S1 GPIO%d/%d/%d)\n",
