@@ -66,6 +66,13 @@
   .evCd{font-family:Consolas,monospace;paint-order:stroke;stroke:#0b0f14;
     stroke-width:3px;fill:#8b98a8}
   .ringSeg{fill:#101822;stroke:#2a3646;stroke-width:1.5}
+  #lrView{display:none;width:440px;max-width:100%;gap:14px;height:440px;align-items:stretch}
+  .lrbox{flex:1;border:2px solid var(--line);border-radius:18px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:6px;font-size:2rem;font-weight:800;
+    color:#3a4656;background:#0e141c;transition:background .15s,border-color .15s}
+  .lrbox .lrArrow{font-size:5rem;line-height:1}
+  .lrbox.hit{background:#1c3a5e;border-color:var(--acc);color:#e6edf3;box-shadow:0 0 34px #4dabf755}
+  .lrCd{font-size:1.1rem;color:var(--sub);font-family:Consolas,monospace;min-height:1.3em;font-weight:400}
 </style>
 </head>
 <body>
@@ -137,6 +144,11 @@
         </linearGradient>
       </defs>
     </svg>
+    <!-- 좌우 전용 뷰: 두 방향 패널 점등 (X쌍만 있을 때/단순 확인용) -->
+    <div id="lrView">
+      <div class="lrbox" id="lrLeft"><div class="lrArrow">◀</div><div>왼쪽</div><div class="lrCd" id="lrCdL"></div></div>
+      <div class="lrbox" id="lrRight"><div class="lrArrow">▶</div><div>오른쪽</div><div class="lrCd" id="lrCdR"></div></div>
+    </div>
     <div class="readout" id="readout"><div class="idle">… 소리 대기 중 …</div></div>
     <div class="classbox" id="classBox">🔎 소리 분류: 준비 중…</div>
   </div>
@@ -375,6 +387,19 @@ setInterval(() => {
     if (rem <= 0) { ln.remove(); continue; }
     ln.setAttribute('opacity', (0.85 * rem / RING_HIST_TTL).toFixed(2));
   }
+  // 좌우 뷰 패널 갱신
+  for (const side of ['L', 'R']) {
+    const box = $(side === 'L' ? 'lrLeft' : 'lrRight');
+    const cd = $(side === 'L' ? 'lrCdL' : 'lrCdR');
+    const rem = lrState[side] - now;
+    if (rem <= 0) {
+      box.classList.remove('hit'); box.style.opacity = '1'; cd.textContent = '';
+    } else {
+      box.classList.add('hit');
+      box.style.opacity = (rem < fspan ? 0.45 + 0.55 * rem / fspan : 1).toFixed(2);
+      cd.textContent = (rem / 1000).toFixed(1) + 's';
+    }
+  }
   if (ringCenterEv) {
     const rem = ringCenterEv.expireAt - now;
     if (rem <= 0) {
@@ -387,16 +412,23 @@ setInterval(() => {
   }
 }, 100);
 
+// 좌우 전용 뷰 상태 (좌/우 패널 점등 만료 시각)
+const lrState = { L: 0, R: 0 };
+function lrFlash(side) { lrState[side] = performance.now() + ARROW_TTL; }
+
 function applyView() {
-  const ring = viewMode === 'ring';
+  const ring = viewMode === 'ring', lr = viewMode === 'lr';
+  document.querySelector('.dial-card svg').style.display = lr ? 'none' : '';
+  $('lrView').style.display = lr ? 'flex' : 'none';
   $('ringView').style.display = ring ? '' : 'none';
   $('ringCenter').style.display = ring ? '' : 'none';
   ['ticks', 'ghosts', 'evArrows', 'compassLabels'].forEach(id =>
     $(id).style.display = ring ? 'none' : '');
-  $('btnView').textContent = ring ? '🧭 나침반 뷰' : '⭕ 링 뷰';
+  // 버튼은 "다음 모드"를 표시: 나침반→링→좌우→나침반 순환
+  $('btnView').textContent = lr ? '🧭 나침반 뷰' : ring ? '◀▶ 좌우 뷰' : '⭕ 링 뷰';
 }
 $('btnView').addEventListener('click', () => {
-  viewMode = viewMode === 'ring' ? 'compass' : 'ring';
+  viewMode = viewMode === 'compass' ? 'ring' : viewMode === 'ring' ? 'lr' : 'compass';
   localStorage.setItem('doaView', viewMode);
   applyView();
 });
@@ -414,6 +446,7 @@ function showEvent(phi, strength, details = null) {
   const label = (details && details.labelKo) ? details.labelKo : '🔊 소리';
   spawnArrow(phi, label, danger, details ? Number(details.yaw) : NaN);
   spawnRing(phi, label, danger);
+  lrFlash(Math.cos(phi * Math.PI / 180) < 0 ? 'L' : 'R');
 
   // 펄스
   pulse.classList.remove('pulse-anim'); void pulse.getBBox(); // reflow
@@ -512,6 +545,7 @@ function parseLine(line) {
             if (axPhi !== null) {
               spawnArrow(axPhi, axLabel, false, Number(record.yaw));
               spawnRing(axPhi, axLabel, false);
+              if (record.axis === 'x') lrFlash(axPhi === 180 ? 'L' : 'R');
             }
           }
         }
