@@ -170,6 +170,21 @@ static void imuUpdate() {
   float dt = (now - imuLastUs) * 1e-6f;
   imuLastUs = now;
   if (isnan(g) || dt <= 0 || dt > 0.5f) return;
+
+  // 정지 자동 재보정: ~2초 창에서 자이로 변동이 ±1dps 이내면 "정지"로 보고
+  // 그 평균을 바이어스에 서서히 반영. 부팅 순간 흔들림으로 오염된 보정과
+  // 온도 드리프트를 RST 없이 자가 치유한다 (실제 회전은 1dps를 훨씬 넘어 안전).
+  static float wMin = 1e9f, wMax = -1e9f, wSum = 0;
+  static int   wN = 0;
+  if (g < wMin) wMin = g;
+  if (g > wMax) wMax = g;
+  wSum += g; wN++;
+  if (wN >= 94) {                       // 프레임 21.3ms × 94 ≈ 2초
+    if (wMax - wMin < 1.0f)
+      gzBias += 0.1f * (wSum / wN - gzBias);
+    wMin = 1e9f; wMax = -1e9f; wSum = 0; wN = 0;
+  }
+
   yawDeg += YAW_SIGN * (g - gzBias) * dt;
   yawDeg = fmodf(yawDeg, 360.0f);
   if (yawDeg < 0) yawDeg += 360.0f;
