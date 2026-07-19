@@ -51,6 +51,15 @@ static float physicalLagY;
 #define PHAT_K_LO 12       // ≈550Hz  (빈폭 = 48000/1024 = 46.875Hz)
 #define PHAT_K_HI 55       // ≈2600Hz — 6cm 간격의 공간 앨리어싱 한계 아래
 #define PHAT_STEP 0.125f   // lag 탐색 격자 (샘플) — 주파수영역 조향이라 임의 정밀도 가능
+//  ---- 온셋 정렬 (선행음 효과) ----
+//  직접음은 항상 반사음보다 2~8ms 먼저 도착한다. 에너지 급상승(온셋)을 찾아
+//  그 직후 ~5ms 창만 상관에 쓰면 반사가 끼기 전의 깨끗한 직접음으로 판정된다.
+//  17cm 간격은 탐색창(±27)이 넓어 반사 경로가 후보로 대거 유입되는데(실측),
+//  온셋 창이 이를 원천 차단. 온셋이 없는 프레임(지속음)은 전체 프레임으로 폴백.
+#define ONSET_BLK   64     // 온셋 탐지 블록 크기 (1.33ms)
+#define ONSET_RATIO 9.0f   // 블록 에너지가 조용할 때의 9배(≈9.5dB) 넘으면 온셋
+#define ONSET_WIN   256    // 온셋 후 상관 창 (5.3ms — 첫 반사 도착 전)
+#define ONSET_PRE   32     // 파면 앞부분 포함용 여유 (0.7ms)
 #define CORR_GATE      0.28f // PHAT 코히어런스 피크 최소값 (1.0 = 완벽한 단일 경로)
 #define CONF_GATE      0.10f // 주 피크와 사이드로브의 상대 분리도
 #define SIDEBAND_SKIP  3     // 주 피크 ±3샘플(대역제한 메인로브)은 2차 피크 탐색에서 제외
@@ -293,11 +302,18 @@ static void fft(float* re, float* im) {
 }
 #endif
 
+// 쌍별 적응 상태 (게이트 + 온셋 탐지)
+struct PairState {
+  float noiseFloor;   // 조용한 프레임 rms의 EMA
+  float blockFloor;   // 조용한 프레임의 블록(1.3ms) 평균 에너지 EMA
+  bool  prevLoud;     // 직전 프레임이 게이트를 넘었는지 (프레임 경계 온셋 판정용)
+};
+
 // ---------- 한 쌍 처리: 분리 → DC제거 → 상관 → 보간 → 신뢰도 ----------
 //  반환 = rms.  out_lagF = 서브샘플 지연(양수면 Left쪽에서 소리), out_ok = 신뢰 여부
 static float processPair(const int32_t* buf, float* L, float* R, int n,
                          float& out_lagF, bool& out_ok, float& out_conf,
-                         float& out_peak, float& noiseFloor) {
+                         float& out_peak, PairState& st) {
   int clipped = 0;
   for (int i = 0; i < n; i++) {
     L[i] = (float)(buf[2 * i]     >> 8);   // 32bit 슬롯 안의 24bit 데이터
@@ -327,8 +343,18 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
     n = m;
   }
 
+  // 블록(1.3ms) 에너지 — 온셋 탐지 겸 전체 에너지 계산
+  const int nb = n / ONSET_BLK;
+  float be[FRAMES / ONSET_BLK];
   float eng = 0;
-  for (int i = 0; i < n; i++)
+  for (int b = 0; b < nb; b++) {
+    float s = 0;
+    for (int i = b * ONSET_BLK; i < (b + 1) * ONSET_BLK; i++)
+      s += L[i] * L[i] + R[i] * R[i];
+    be[b] = s;
+    eng += s;
+  }
+  for (int i = nb * ONSET_BLK; i < n; i++)
     eng += L[i] * L[i] + R[i] * R[i];
   float rms = sqrtf(eng / (2.0f * n));
 
@@ -337,22 +363,50 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
   // 적응형 에너지 게이트: 조용한 프레임 rms를 EMA로 학습해 소음 바닥을 추적.
   // 열린 창문 교통소음 같은 상시 배경(실측 중앙값 ~5.6k)이 게이트를 뚫고
   // 이벤트를 도배하는 문제 방지. 조용한 방에선 기본 게이트(2500)로 복귀.
-  if (noiseFloor <= 0) noiseFloor = rms;
-  else if (rms < 3.0f * noiseFloor) noiseFloor += 0.02f * (rms - noiseFloor);
-  float gate = ENERGY_GATE > 2.5f * noiseFloor ? ENERGY_GATE : 2.5f * noiseFloor;
-  if (rms < gate) return rms;
+  if (st.noiseFloor <= 0) st.noiseFloor = rms;
+  else if (rms < 3.0f * st.noiseFloor) st.noiseFloor += 0.02f * (rms - st.noiseFloor);
+  float gate = ENERGY_GATE > 2.5f * st.noiseFloor ? ENERGY_GATE : 2.5f * st.noiseFloor;
+  if (rms < gate) {
+    float mb = eng / (nb > 0 ? nb : 1);
+    if (st.blockFloor <= 0) st.blockFloor = mb;
+    else st.blockFloor += 0.05f * (mb - st.blockFloor);
+    st.prevLoud = false;
+    return rms;
+  }
 
   // 포화 프레임은 파형이 찌그러져 시간차가 엉터리 — 방향 판정에서 제외.
   // (큰 박수도 감쇠 중인 다음 프레임에서 깨끗하게 판정됨. 실측: 살살 친
   //  박수도 rms 100만+ 포화로 방향이 무작위였던 문제)
+  bool wasQuiet = !st.prevLoud;
+  st.prevLoud = true;
   if (clipped > n / 64) return rms;
+
+  // ---- 온셋 탐지: 에너지가 조용한 바닥의 ONSET_RATIO배를 처음 넘는 상승 교차 ----
+  // 발견 시 그 직후 ONSET_WIN(~5ms) 창만 상관에 사용 (직접음만, 반사 도착 전).
+  // 프레임 시작부터 이미 큰 소리(지속음 중간)면 온셋 아님 → 전체 프레임 폴백.
+  int s0 = 0, wlen = n;
+  if (st.blockFloor > 0) {
+    float th = ONSET_RATIO * st.blockFloor;
+    for (int b = 0; b < nb; b++) {
+      if (be[b] >= th) {
+        if (b > 0 || wasQuiet) {
+          int start = b * ONSET_BLK - ONSET_PRE;
+          if (start < 0) start = 0;
+          int len = ONSET_WIN;
+          if (start + len > n) len = n - start;
+          if (len >= 160) { s0 = start; wlen = len; }
+        }
+        break;
+      }
+    }
+  }
 
 #if USE_PHAT
   // ---- 대역 제한 GCC-PHAT ----
-  // 필터된 n(=976)샘플 + 제로패딩 → 순환상관이 |lag|<=48까지 선형상관과 동일.
+  // 선택된 창(온셋 창 또는 전체 프레임) + 제로패딩 → 순환상관이 선형상관과 동일.
   // L→실수부, R→허수부로 채워 복소 FFT 1회로 두 채널 스펙트럼을 동시에 얻는다.
-  for (int i = 0; i < n; i++) { fftRe[i] = L[i]; fftIm[i] = R[i]; }
-  for (int i = n; i < FFT_N; i++) { fftRe[i] = 0; fftIm[i] = 0; }
+  for (int i = 0; i < wlen; i++) { fftRe[i] = L[s0 + i]; fftIm[i] = R[s0 + i]; }
+  for (int i = wlen; i < FFT_N; i++) { fftRe[i] = 0; fftIm[i] = 0; }
   fft(fftRe, fftIm);
 
   // 대역 빈만 추출해 크로스 스펙트럼의 단위 위상벡터를 만든다.
@@ -585,9 +639,9 @@ void loop() {
   imuUpdate();             // yaw 적분 + 5Hz 스트림 (미장착 시 no-op)
 
   float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
-  static float noiseFloorX = 0, noiseFloorY = 0;
-  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX, noiseFloorX);
-  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY, noiseFloorY);
+  static PairState stX = {0, 0, false}, stY = {0, 0, false};
+  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX, stX);
+  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY, stY);
 
   // ---- 채널별 레벨 미터 (대시보드용) ----
   // DOA 판정과 무관하게 항상 계산·전송 — 촬영 전 4채널이 다 살아있는지
