@@ -317,14 +317,16 @@ struct PairState {
 //  반환 = rms.  out_lagF = 서브샘플 지연(양수면 Left쪽에서 소리), out_ok = 신뢰 여부
 static float processPair(const int32_t* buf, float* L, float* R, int n,
                          float& out_lagF, bool& out_ok, float& out_conf,
-                         float& out_peak, PairState& st, bool& out_onset) {
+                         float& out_peak, PairState& st, bool& out_onset,
+                         float gain) {
   out_onset = false;
   int clipped = 0;
   for (int i = 0; i < n; i++) {
     L[i] = (float)(buf[2 * i]     >> 8);   // 32bit 슬롯 안의 24bit 데이터
     R[i] = (float)(buf[2 * i + 1] >> 8);
-    // 포화(클리핑) 카운트 — 24bit 풀스케일 ±8.39M의 ~85% 이상
+    // 포화(클리핑) 카운트 — 24bit 풀스케일 ±8.39M의 ~85% 이상 (게인 적용 전 원신호 기준)
     if (L[i] > 7.0e6f || L[i] < -7.0e6f || R[i] > 7.0e6f || R[i] < -7.0e6f) clipped++;
+    L[i] *= gain; R[i] *= gain;   // 쌍 간 감도 보정 (X=1.0, Y=Y_GAIN)
   }
 
   // 밴드패스 = 중심 정렬된 이동평균의 차 (MA8 − MA48 ≈ 550Hz~2.6kHz, 게인≈1)
@@ -651,8 +653,8 @@ void loop() {
   float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
   static PairState stX = {0, 0, false}, stY = {0, 0, false};
   bool onsetX = false, onsetY = false;
-  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX, stX, onsetX);
-  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY, stY, onsetY);
+  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX, stX, onsetX, 1.0f);
+  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY, stY, onsetY, Y_GAIN);
 
   // ---- 채널별 레벨 미터 (대시보드용) ----
   // DOA 판정과 무관하게 항상 계산·전송 — 촬영 전 4채널이 다 살아있는지
