@@ -37,3 +37,13 @@
 // 배선 확인용:
 //   Mic #1 : L/R -> GND  => 왼쪽 채널 (Left)
 //   Mic #2 : L/R -> VDD  => 오른쪽 채널 (Right)
+
+// ---- IMU (MPU-9250/9255/6500, I2C) — 착용형 회전 보정용 자이로 ----
+//  배선: VCC->3V3, GND->GND, SCL->GPIO9, SDA->GPIO8, AD0->GND(주소 0x68)
+//  ※ 전원은 마이크 스타노드가 아니라 보드 3V3 핀에서 직접 따올 것 (접촉불량 전례)
+#define PIN_IMU_SDA  8
+#define PIN_IMU_SCL  9
+#define IMU_ADDR     0x68
+// 요yaw 부호: 배열을 위에서 봤을 때 반시계 회전 시 yaw가 증가해야 함(phi와 동일 좌표계).
+// 실기 테스트에서 화살표가 반대로 돌면 -1.0f로 뒤집는다.
+#define YAW_SIGN     1.0f

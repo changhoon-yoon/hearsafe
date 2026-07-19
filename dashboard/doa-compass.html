@@ -72,7 +72,7 @@
 
 <div class="top">
   <h1>🧭 DOA 실시간 나침반 <span style="color:var(--sub);font-size:.8rem;font-weight:400">ESP32-S3 · 4-mic 십자 배열</span></h1>
-  <div class="status"><div class="dot" id="dot"></div><span id="statusTxt">연결 안 됨</span></div>
+  <div class="status"><div class="dot" id="dot"></div><span id="statusTxt">연결 안 됨</span><span id="imuBadge" style="display:none;color:var(--ok)" title="IMU 연결됨 — 기기가 회전해도 화살표가 소리 방향을 유지합니다">🧭IMU</span></div>
   <button id="btnFilter" title="켜면 사이렌·화재경보 등 위험 소리일 때만 화살표가 움직입니다">🚨 위험만: ON</button>
   <button id="btnView" title="화살표 대신 시계 베젤처럼 방향 칸이 점등되는 뷰로 전환">⭕ 링 뷰</button>
   <button id="btnReg" title="지금 나는 소리를 6초 녹음해 나만의 소리로 등록 (서버 모드 전용)">➕ 소리 등록</button>
@@ -209,7 +209,17 @@ const ARROW_HOLD = 1000;         // 이 시간 동안은 완전 불투명, 이�
 const evArrowsG = $('evArrows');
 const activeArrows = new Map();  // labelKo → {g, shaft, path, tag, cd, expireAt}
 
-function spawnArrow(phi, label, danger) {
+let curYaw = null;   // IMU 현재 yaw (도, phi와 같은 좌표계) — 없으면 null
+
+function positionArrow(a, disp) {
+  const rad = disp * Math.PI / 180;
+  const tx = Math.cos(rad) * 140, ty = -Math.sin(rad) * 140;   // 라벨 위치(화살촉 너머)
+  a.shaft.setAttribute('transform', `rotate(${90 - disp})`);   // SVG 회전: 시계방향 +
+  a.tag.setAttribute('x', tx.toFixed(1)); a.tag.setAttribute('y', (ty - 2).toFixed(1));
+  a.cd.setAttribute('x', tx.toFixed(1));  a.cd.setAttribute('y', (ty + 14).toFixed(1));
+}
+
+function spawnArrow(phi, label, danger, evYaw) {
   let a = activeArrows.get(label);
   if (!a) {
     const g = document.createElementNS(SVGNS, 'g');
@@ -231,13 +241,16 @@ function spawnArrow(phi, label, danger) {
     a = { g, shaft, path, tag, cd };
     activeArrows.set(label, a);
   }
-  const rad = phi * Math.PI / 180;
-  const tx = Math.cos(rad) * 140, ty = -Math.sin(rad) * 140;   // 라벨 위치(화살촉 너머)
-  a.shaft.setAttribute('transform', `rotate(${90 - phi})`);    // SVG 회전: 시계방향 +
+  // IMU가 있으면 세계좌표로 고정 — 기기가 돌아도 화살표가 소리 난 방향을 유지
+  const yawRef = (Number.isFinite(evYaw) && evYaw >= 0) ? evYaw : curYaw;
+  a.phi = phi;
+  a.worldPhi = (yawRef != null) ? phi + yawRef : null;
+  a.label = label;
+  a.danger = danger;
+  a.aligned = false;
+  positionArrow(a, phi);
   a.path.setAttribute('fill', danger ? '#ff6b6bd9' : '#4dabf7c9');
   a.path.setAttribute('stroke', danger ? '#ffd6d6' : '#a5d8ff');
-  a.tag.setAttribute('x', tx.toFixed(1)); a.tag.setAttribute('y', (ty - 2).toFixed(1));
-  a.cd.setAttribute('x', tx.toFixed(1));  a.cd.setAttribute('y', (ty + 14).toFixed(1));
   a.tag.textContent = label;
   a.g.setAttribute('opacity', '1');
   a.expireAt = performance.now() + ARROW_TTL;
@@ -251,6 +264,20 @@ setInterval(() => {
     const fadeSpan = ARROW_TTL - ARROW_HOLD;
     a.g.setAttribute('opacity', (rem < fadeSpan ? rem / fadeSpan : 1).toFixed(2));
     a.cd.textContent = (rem / 1000).toFixed(1) + 's';
+    // IMU 회전 보정: "지금 내 기준" 방향으로 갱신, 정면(위쪽 ±18°) 정렬 시 초록 ✓
+    if (curYaw != null && a.worldPhi != null) {
+      let disp = (a.worldPhi - curYaw) % 360;
+      if (disp < 0) disp += 360;
+      positionArrow(a, disp);
+      const diff = ((disp - 90) % 360 + 360) % 360;
+      const facing = Math.min(diff, 360 - diff) <= 18;
+      if (facing !== a.aligned) {
+        a.aligned = facing;
+        a.path.setAttribute('fill', facing ? '#51cf66d9' : (a.danger ? '#ff6b6bd9' : '#4dabf7c9'));
+        a.path.setAttribute('stroke', facing ? '#b2f2bb' : (a.danger ? '#ffd6d6' : '#a5d8ff'));
+        a.tag.textContent = (facing ? '✓ ' : '') + a.label;
+      }
+    }
   }
 }, 100);
 
@@ -364,7 +391,7 @@ function showEvent(phi, strength, details = null) {
   const danger = !!(details && (details.danger || details.type === 'alert' ||
                     (details.top && details.top[0] && details.top[0].danger)));
   const label = (details && details.labelKo) ? details.labelKo : '🔊 소리';
-  spawnArrow(phi, label, danger);
+  spawnArrow(phi, label, danger, details ? Number(details.yaw) : NaN);
   spawnRing(phi, label, danger);
 
   // 펄스
@@ -490,6 +517,14 @@ function parseLine(line) {
         box.innerHTML = record.ready
           ? '🔎 소리 분류: <b>YAMNet 가동 중</b> — 소리를 내보세요'
           : `🔎 소리 분류 비활성 (${record.error || '로딩 실패'})`;
+        return;
+      }
+      if (record.type === 'imu') {
+        // 펌웨어 5Hz yaw 스트림 — 화살표 세계좌표 고정에 사용 (yaw<0 = IMU 없음)
+        if (Number.isFinite(Number(record.yaw)) && Number(record.yaw) >= 0) {
+          curYaw = Number(record.yaw);
+          document.getElementById('imuBadge').style.display = '';
+        }
         return;
       }
       if (record.type === 'system') {

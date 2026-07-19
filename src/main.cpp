@@ -13,6 +13,7 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 #include <math.h>
+#include <Wire.h>
 #include "mbedtls/base64.h"
 #include "pins.h"
 
@@ -99,6 +100,85 @@ static void streamAudio(const int32_t* buf, int n) {
   Serial.println("\"}");
 }
 #endif
+
+// ---- IMU (자이로 yaw 적분) — 착용형 회전 보정 ----
+//  기기가 회전해도 화살표가 "소리 난 세계 방향"을 계속 가리키게 하는 기반.
+//  자이로만 사용: 화살표 수명(3초) 동안 드리프트는 무시 가능 → 지자기 캘리브레이션 불필요.
+//  IMU 미장착 시 imuOk=false로 조용히 비활성 (부팅에 영향 없음).
+static bool     imuOk = false;
+static float    yawDeg = 0.0f;      // 0~360, phi와 같은 좌표계(위에서 볼 때 반시계 +)
+static float    gzBias = 0.0f;
+static uint32_t imuLastUs = 0;
+static uint32_t imuLastPrint = 0;
+
+static void imuWrite8(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(IMU_ADDR);
+  Wire.write(reg); Wire.write(val);
+  Wire.endTransmission();
+}
+
+static bool imuRead(uint8_t reg, uint8_t* buf, int n) {
+  Wire.beginTransmission(IMU_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom((int)IMU_ADDR, n) != n) return false;
+  for (int i = 0; i < n; i++) buf[i] = Wire.read();
+  return true;
+}
+
+static float imuReadGzDps() {
+  uint8_t b[2];
+  if (!imuRead(0x47, b, 2)) return NAN;              // GYRO_ZOUT_H/L
+  int16_t raw = (int16_t)((b[0] << 8) | b[1]);
+  return raw / 65.5f;                                // ±500dps 스케일
+}
+
+static void imuInit() {
+  Wire.begin(PIN_IMU_SDA, PIN_IMU_SCL, 400000);
+  uint8_t who = 0;
+  if (!imuRead(0x75, &who, 1)) {                     // WHO_AM_I — 응답 없으면 미장착
+    Serial.println("{\"type\":\"imu\",\"status\":\"absent\"}");
+    return;
+  }
+  imuWrite8(0x6B, 0x01);   // PWR_MGMT_1: sleep 해제, PLL 클럭
+  delay(50);
+  imuWrite8(0x1A, 0x03);   // DLPF 41Hz
+  imuWrite8(0x1B, 0x08);   // 자이로 ±500dps
+  delay(20);
+  // 정지 상태 바이어스 보정 (~0.6초) — 부팅 시 배열이 움직이지 않는다는 가정
+  float sum = 0; int n = 0;
+  for (int i = 0; i < 120; i++) {
+    float g = imuReadGzDps();
+    if (!isnan(g)) { sum += g; n++; }
+    delay(5);
+  }
+  if (n < 60) {
+    Serial.println("{\"type\":\"imu\",\"status\":\"unstable\"}");
+    return;
+  }
+  gzBias = sum / n;
+  imuOk = true;
+  imuLastUs = micros();
+  Serial.printf("{\"type\":\"imu\",\"status\":\"ready\",\"who\":%u,\"bias\":%.2f}\n",
+                (unsigned)who, gzBias);
+}
+
+static void imuUpdate() {
+  if (!imuOk) return;
+  float g = imuReadGzDps();
+  uint32_t now = micros();
+  float dt = (now - imuLastUs) * 1e-6f;
+  imuLastUs = now;
+  if (isnan(g) || dt <= 0 || dt > 0.5f) return;
+  yawDeg += YAW_SIGN * (g - gzBias) * dt;
+  yawDeg = fmodf(yawDeg, 360.0f);
+  if (yawDeg < 0) yawDeg += 360.0f;
+  uint32_t ms = millis();
+  if (ms - imuLastPrint >= 200) {                    // 대시보드 회전 보정용 5Hz 스트림
+    imuLastPrint = ms;
+    Serial.printf("{\"type\":\"imu\",\"yaw\":%.1f}\n", yawDeg);
+  }
+}
 
 // 이벤트 래치 상태 — 축별 "첫 유효 프레임"(=직접음)의 lag를 래치.
 // (최대 rms 프레임은 잔향이 더 클 수 있어 직접음 보장이 안 됨 — 실측으로 확인)
@@ -382,9 +462,10 @@ static void print2dEvent(uint32_t frame, float phi, float strength,
   Serial.printf(
     "{\"type\":\"doa\",\"mode\":\"2d\",\"frame\":%lu,\"phi\":%.1f,"
     "\"strength\":%.0f,\"rmsX\":%.0f,\"rmsY\":%.0f,\"lagX\":%.3f,\"lagY\":%.3f,"
-    "\"corrX\":%.3f,\"corrY\":%.3f,\"confX\":%.3f,\"confY\":%.3f,\"vectorNorm\":%.3f}\n",
+    "\"corrX\":%.3f,\"corrY\":%.3f,\"confX\":%.3f,\"confY\":%.3f,\"vectorNorm\":%.3f,"
+    "\"yaw\":%.1f}\n",
     (unsigned long)frame, phi, strength, rmsX, rmsY, lagX, lagY,
-    corrX, corrY, confX, confY, vectorNorm);
+    corrX, corrY, confX, confY, vectorNorm, imuOk ? yawDeg : -1.0f);
 }
 
 static void printAxisEvent(uint32_t frame, char axis, float lag, float strength,
@@ -405,8 +486,9 @@ static void printAxisEvent(uint32_t frame, char axis, float lag, float strength,
   Serial.printf(
     "{\"type\":\"doa\",\"mode\":\"axis\",\"frame\":%lu,\"axis\":\"%c\","
     "\"phi\":null,\"candidateA\":%.1f,\"candidateB\":%.1f,\"strength\":%.0f,\"rms\":%.0f,"
-    "\"lag\":%.3f,\"corr\":%.3f,\"conf\":%.3f}\n",
-    (unsigned long)frame, axis, candidateA, candidateB, strength, rms, lag, corrPeak, conf);
+    "\"lag\":%.3f,\"corr\":%.3f,\"conf\":%.3f,\"yaw\":%.1f}\n",
+    (unsigned long)frame, axis, candidateA, candidateB, strength, rms, lag, corrPeak, conf,
+    imuOk ? yawDeg : -1.0f);
 }
 
 void setup() {
@@ -422,6 +504,7 @@ void setup() {
 #if USE_PHAT
   fftInit();
 #endif
+  imuInit();   // IMU 미장착이어도 안전 (absent 판정 후 비활성)
 
   Serial.println("\n=== DOA 3단계: 2D 십자 배열 (좌우 + 상하, 360°) ===");
 #if USE_PHAT
@@ -469,6 +552,7 @@ void loop() {
 #if AUDIO_STREAM
   streamAudio(bufX, nX);   // M1 원신호(광대역) → 노트북 분류기
 #endif
+  imuUpdate();             // yaw 적분 + 5Hz 스트림 (미장착 시 no-op)
 
   float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
   float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX);
