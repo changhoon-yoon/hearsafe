@@ -16,14 +16,16 @@
 #define PIN_I2S_WS_Y  16  // LRCLK — 세로쌍 M3/M4 공유
 #define PIN_I2S_SD_Y  17  // DIN   — 세로쌍 M3/M4 공유 (데이터)
 #define I2S_PORT_Y    I2S_NUM_1
-#define MIC_SPACING_Y 0.06f   // 세로쌍 간격(m). 가로와 달라도 됨.
+#define MIC_SPACING_Y 0.17f   // 세로쌍 간격(m). 2026-07-19 재실장 실측 17cm
 
 // ---- 오디오 설정 ----
 #define SAMPLE_RATE   48000   // DOA 정밀도 위해 48kHz
 #define I2S_PORT      I2S_NUM_0
 
 // ---- DOA 물리 파라미터 ----
-#define MIC_SPACING_M 0.06f   // ★ 두 마이크 중심 간 거리(m). 실제 잰 값으로 수정! (예: 6cm=0.06)
+#define MIC_SPACING_M 0.17f   // ★ 두 마이크 중심 간 거리(m). 2026-07-19 재실장 실측 17cm
+                              //   물리 최대 lag 23.8샘플(구 6cm=8.4) — 각도 해상도 ~3배 향상.
+                              //   대가: 1kHz+ 순음은 탐색창 내 다중 피크 가능(광대역 소리는 무관)
 #define SOUND_SPEED   343.0f  // 음속 m/s
 
 // ---- 축별 실측 보정 ----
