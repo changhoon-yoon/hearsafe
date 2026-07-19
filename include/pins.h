@@ -29,7 +29,9 @@
 // ---- 축별 실측 보정 ----
 // processPair()의 원시 lag에 먼저 SIGN을 곱하고, 중앙 음원에서 측정한 고정 bias를 뺀다.
 // 중앙에서 여러 번 측정한 lag 평균이 +0.18이라면 LAG_OFFSET_*를 0.18f로 설정한다.
-#define LAG_SIGN_X   -1.0f    // 현재 X쌍은 실장 방향이 채널 표기와 반대
+#define LAG_SIGN_X    1.0f    // 실측 확정(+1): 4점 탭 테스트에서 왼쪽=m2/오른쪽=m1 (X쌍 좌우 스왑 실장),
+                              // 위=m3/아래=m4 정상. 원 배선(왼쪽=m1) 시절의 -1에서 반전.
+                              // ※ 방향 검증은 반드시 박수로 — 바람/문지르기는 국소 잡음이라 판정 불가
 #define LAG_SIGN_Y    1.0f
 #define LAG_OFFSET_X  0.0f    // 단위: sample
 #define LAG_OFFSET_Y  0.0f
