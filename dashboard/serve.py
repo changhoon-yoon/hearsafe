@@ -13,6 +13,7 @@ import argparse
 import collections
 import ipaddress
 import json
+import math
 import os
 import queue
 import socket
@@ -88,12 +89,42 @@ def habituated(phi: float) -> bool:
     return True
 
 
+# ---- 반사 플립 가드 ----
+# 박수 직접음 판정 직후 0.5~1초 뒤 벽 반사가 "반대편" 이벤트를 하나 더 만드는
+# 문제(실측: 왼쪽 박수 후 -20대 lag 반사 클러스터). 첫 판정은 지연 없이 통과시키고,
+# 직후 짧은 시간 안의 좌우 모순 판정만 반사로 보고 억제한다.
+FLIP_GUARD_SEC = 1.2
+_lr_last = {"side": 0, "t": 0.0}
+
+
+def _lr_side(rec):
+    """이벤트의 좌우 반구 판정: -1=왼쪽, +1=오른쪽, 0=판정 불가/정면·후면."""
+    phi = rec.get("phi")
+    if isinstance(phi, (int, float)):
+        c = math.cos(math.radians(phi))
+    elif rec.get("axis") == "x" and isinstance(rec.get("candidateA"), (int, float)):
+        c = -1.0 if 90 < rec["candidateA"] < 270 else 1.0
+    else:
+        return 0
+    if abs(c) < 0.2:
+        return 0
+    return -1 if c < 0 else 1
+
+
 def remember_doa(line: str):
     """doa 라인 처리: 습관화 판정 후 억제 여부를 돌려준다 (True=억제)."""
     try:
         rec = json.loads(line)
         if rec.get("type") != "doa":
             return False
+        now = time.time()
+        side = _lr_side(rec)
+        if side != 0:
+            if (_lr_last["side"] not in (0, side)
+                    and now - _lr_last["t"] <= FLIP_GUARD_SEC):
+                return True   # 직전 판정과 좌우 모순 + 시간창 안 = 반사로 억제
+            _lr_last["side"] = side
+            _lr_last["t"] = now
         phi = rec.get("phi")
         if isinstance(phi, (int, float)):
             doa_history.append((time.time(), float(phi)))

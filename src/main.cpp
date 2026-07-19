@@ -33,7 +33,9 @@ static float physicalLagY;
 //    - 아래쪽 차단: 저주파 소음/클럭 앨리어싱 → conf 붕괴 방지
 //    - 위쪽 차단: 6cm 간격의 공간 앨리어싱 한계(2.9kHz) 위 제거 → lag 널뜀 방지
 //    - 통과대역 게인 ≈ 1 (차분 HPF의 과도한 인밴드 감쇠 문제 해결)
-#define ENERGY_GATE 2500.0f
+#define ENERGY_GATE 12000.0f  // 2500→12000 (2026-07-20 실측): 잔소음이 세기 ~10.5k로
+                              // 발화해 과민 반응. 박수/생활 경보는 2만~10만+라 12k 바닥이면
+                              // 부스럭 차단 + 유효 소리 여유 통과. 원거리 감도 필요 시 낮출 것
 #define MAF 8    // 빠른 이동평균 (LPF ≈ 2.6kHz)
 #define MAS 48   // 느린 이동평균 (LPF ≈ 550Hz) — 빼서 HPF 역할
 #define MAOFF ((MAS - MAF) / 2)   // 중심 정렬 오프셋 = 20
@@ -70,7 +72,9 @@ static float physicalLagY;
 #define VECTOR_MAX_NORM 1.20f
 #define EVENT_FRAMES   4    // 한 축만 잡혔을 때 다른 축을 기다리는 최대 프레임 (~85ms)
 #define AXIS_PAIR_MAX_FRAMES 1 // 두 축은 같은 프레임 또는 바로 다음 프레임까지만 결합
-#define REFRACT_FRAMES 10   // 판정 후 불응기 (~210ms) — 잔향 재발화 방지
+#define REFRACT_FRAMES 24   // 판정 후 불응기 ~510ms (10→24, 2026-07-20 실측): 박수당
+                            // 직접음 판정 0.2초 뒤 벽 반사가 반대편 이벤트를 추가 생성 —
+                            // 반사 도착 시간대를 불응기로 흡수해 이벤트를 박수당 1개로
 
 #define DEBUG_FRAMES 0   // 운영 중 시리얼/DMA 지연 방지. 보정할 때만 1로 변경
 
@@ -313,7 +317,8 @@ struct PairState {
 //  반환 = rms.  out_lagF = 서브샘플 지연(양수면 Left쪽에서 소리), out_ok = 신뢰 여부
 static float processPair(const int32_t* buf, float* L, float* R, int n,
                          float& out_lagF, bool& out_ok, float& out_conf,
-                         float& out_peak, PairState& st) {
+                         float& out_peak, PairState& st, bool& out_onset) {
+  out_onset = false;
   int clipped = 0;
   for (int i = 0; i < n; i++) {
     L[i] = (float)(buf[2 * i]     >> 8);   // 32bit 슬롯 안의 24bit 데이터
@@ -399,7 +404,7 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
           if (start < 0) start = 0;
           int len = ONSET_WIN;
           if (start + len > n) len = n - start;
-          if (len >= 160) { s0 = start; wlen = len; }
+          if (len >= 160) { s0 = start; wlen = len; out_onset = true; }
         }
         break;
       }
@@ -645,8 +650,9 @@ void loop() {
 
   float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
   static PairState stX = {0, 0, false}, stY = {0, 0, false};
-  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX, stX);
-  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY, stY);
+  bool onsetX = false, onsetY = false;
+  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX, stX, onsetX);
+  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY, stY, onsetY);
 
   // ---- 채널별 레벨 미터 (대시보드용) ----
   // DOA 판정과 무관하게 항상 계산·전송 — 촬영 전 4채널이 다 살아있는지
@@ -696,8 +702,11 @@ void loop() {
   // 첫 유효 프레임 = 직접음 → 그 lag로 이벤트당 판정 1회.
   if (refract > 0) refract--;
 
-  bool validX = okX && fabsf(lagX) <= physicalLagX + LAG_MARGIN;
-  bool validY = okY && fabsf(lagY) <= physicalLagY + LAG_MARGIN;
+  // 온셋 프레임만 판정에 사용: 직접음은 반드시 "조용→갑자기 커짐"과 함께 도착하고,
+  // 반사·잔향 꼬리는 "이미 시끄러운 중"에 오므로 온셋이 아님 — 좌우 뒤섞임 원천 차단.
+  // (실측 2026-07-20: 박수의 절반이 반사 프레임을 먼저 래치해 반대편으로 판정되던 문제 해결)
+  bool validX = okX && onsetX && fabsf(lagX) <= physicalLagX + LAG_MARGIN;
+  bool validY = okY && onsetY && fabsf(lagY) <= physicalLagY + LAG_MARGIN;
   if ((validX || validY) && refract == 0) {
     if (!inEvent) {
       inEvent = true; evCnt = 0; evHasX = evHasY = false;
