@@ -297,10 +297,13 @@ static void fft(float* re, float* im) {
 //  반환 = rms.  out_lagF = 서브샘플 지연(양수면 Left쪽에서 소리), out_ok = 신뢰 여부
 static float processPair(const int32_t* buf, float* L, float* R, int n,
                          float& out_lagF, bool& out_ok, float& out_conf,
-                         float& out_peak) {
+                         float& out_peak, float& noiseFloor) {
+  int clipped = 0;
   for (int i = 0; i < n; i++) {
     L[i] = (float)(buf[2 * i]     >> 8);   // 32bit 슬롯 안의 24bit 데이터
     R[i] = (float)(buf[2 * i + 1] >> 8);
+    // 포화(클리핑) 카운트 — 24bit 풀스케일 ±8.39M의 ~85% 이상
+    if (L[i] > 7.0e6f || L[i] < -7.0e6f || R[i] > 7.0e6f || R[i] < -7.0e6f) clipped++;
   }
 
   // 밴드패스 = 중심 정렬된 이동평균의 차 (MA8 − MA48 ≈ 550Hz~2.6kHz, 게인≈1)
@@ -330,7 +333,19 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
   float rms = sqrtf(eng / (2.0f * n));
 
   out_ok = false; out_lagF = 0; out_conf = 0; out_peak = 0;
-  if (rms < ENERGY_GATE) return rms;        // 에너지 게이트
+
+  // 적응형 에너지 게이트: 조용한 프레임 rms를 EMA로 학습해 소음 바닥을 추적.
+  // 열린 창문 교통소음 같은 상시 배경(실측 중앙값 ~5.6k)이 게이트를 뚫고
+  // 이벤트를 도배하는 문제 방지. 조용한 방에선 기본 게이트(2500)로 복귀.
+  if (noiseFloor <= 0) noiseFloor = rms;
+  else if (rms < 3.0f * noiseFloor) noiseFloor += 0.02f * (rms - noiseFloor);
+  float gate = ENERGY_GATE > 2.5f * noiseFloor ? ENERGY_GATE : 2.5f * noiseFloor;
+  if (rms < gate) return rms;
+
+  // 포화 프레임은 파형이 찌그러져 시간차가 엉터리 — 방향 판정에서 제외.
+  // (큰 박수도 감쇠 중인 다음 프레임에서 깨끗하게 판정됨. 실측: 살살 친
+  //  박수도 rms 100만+ 포화로 방향이 무작위였던 문제)
+  if (clipped > n / 64) return rms;
 
 #if USE_PHAT
   // ---- 대역 제한 GCC-PHAT ----
@@ -570,8 +585,9 @@ void loop() {
   imuUpdate();             // yaw 적분 + 5Hz 스트림 (미장착 시 no-op)
 
   float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
-  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX);
-  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY);
+  static float noiseFloorX = 0, noiseFloorY = 0;
+  float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX, noiseFloorX);
+  float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY, noiseFloorY);
 
   // ---- 채널별 레벨 미터 (대시보드용) ----
   // DOA 판정과 무관하게 항상 계산·전송 — 촬영 전 4채널이 다 살아있는지
