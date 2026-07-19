@@ -381,6 +381,11 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
   st.prevLoud = true;
   if (clipped > n / 64) return rms;
 
+  // 기계 진동/직접 접촉 차단: 프레임(안경)에 전달된 진동은 음향과 무관한
+  // 시간차 + 비정상적 세기(실측 12만~55만, 음향 박수는 1만~9만)를 만든다.
+  // 착용 중 프레임 만짐/발걸음 충격도 같은 원리로 걸러짐.
+  if (rms > 120000.0f) return rms;
+
   // ---- 온셋 탐지: 에너지가 조용한 바닥의 ONSET_RATIO배를 처음 넘는 상승 교차 ----
   // 발견 시 그 직후 ONSET_WIN(~5ms) 창만 상관에 사용 (직접음만, 반사 도착 전).
   // 프레임 시작부터 이미 큰 소리(지속음 중간)면 온셋 아님 → 전체 프레임 폴백.
