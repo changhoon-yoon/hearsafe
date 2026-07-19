@@ -498,6 +498,22 @@ function parseLine(line) {
           const message = `${axis}축만 감지${candidates}`;
           setStatus('listen', message);
           readout.innerHTML = `<div class="idle">${message}</div>`;
+          // 단일 축 판정도 화살표로 시각화 — 어느 "반쪽"인지는 확실하므로
+          // 그 축의 대표 방향(좌/우/위/아래)으로 표시 (진단·부분 배선 시 유용)
+          if (Number.isFinite(a)) {
+            let axPhi = null, axLabel = '';
+            if (record.axis === 'x') {
+              const left = a > 90 && a < 270;
+              axPhi = left ? 180 : 0; axLabel = left ? '◀ 왼쪽' : '오른쪽 ▶';
+            } else if (record.axis === 'y') {
+              const up = a < 180;
+              axPhi = up ? 90 : 270; axLabel = up ? '▲ 위' : '▼ 아래';
+            }
+            if (axPhi !== null) {
+              spawnArrow(axPhi, axLabel, false, Number(record.yaw));
+              spawnRing(axPhi, axLabel, false);
+            }
+          }
         }
         return;
       }
