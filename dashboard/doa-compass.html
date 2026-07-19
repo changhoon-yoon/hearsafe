@@ -48,6 +48,13 @@
   .log .bar>div{height:100%;background:linear-gradient(90deg,var(--acc),var(--hot));border-radius:3px}
   .hint{font-size:.8rem;color:var(--sub);line-height:1.6}
   .hint code{background:#0b1020;padding:1px 6px;border-radius:5px;color:#ffa657}
+  .levelRow{display:flex;align-items:center;gap:10px;padding:6px 0}
+  .levelRow:not(:last-child){border-bottom:1px solid #1c2530}
+  .lvLabel{width:70px;font-size:.82rem;color:var(--sub)}
+  .lvVal{width:44px;text-align:right;font-size:.78rem;color:var(--sub);font-variant-numeric:tabular-nums}
+  .levelRow .bar{flex:1;height:10px;background:#1c2530;border-radius:5px;overflow:hidden}
+  .levelRow .bar>div{width:0%;height:100%;border-radius:5px;
+    background:linear-gradient(90deg,var(--acc),var(--ok));transition:width .12s linear}
   svg{display:block}
   #arrowG{transition:transform .15s cubic-bezier(.25,.9,.35,1)}
   #pulse{opacity:0}
@@ -136,6 +143,13 @@
 
   <!-- ===== 사이드 ===== -->
   <div class="side">
+    <div class="card">
+      <h2>📶 채널 레벨 <span style="font-weight:400">— 촬영 전 4개 다 살아있는지 톡톡 쳐서 확인</span></h2>
+      <div class="levelRow"><span class="lvLabel">M1 왼쪽</span><span class="bar"><div id="lvBar1"></div></span><span class="lvVal" id="lvVal1">0</span></div>
+      <div class="levelRow"><span class="lvLabel">M2 오른쪽</span><span class="bar"><div id="lvBar2"></div></span><span class="lvVal" id="lvVal2">0</span></div>
+      <div class="levelRow"><span class="lvLabel">M3 위</span><span class="bar"><div id="lvBar3"></div></span><span class="lvVal" id="lvVal3">0</span></div>
+      <div class="levelRow"><span class="lvLabel">M4 아래</span><span class="bar"><div id="lvBar4"></div></span><span class="lvVal" id="lvVal4">0</span></div>
+    </div>
     <div class="card">
       <h2>📋 이벤트 로그</h2>
       <ul class="log" id="log"><li style="color:var(--sub)">아직 이벤트 없음</li></ul>
@@ -397,12 +411,33 @@ function showEvent(phi, strength, details = null) {
 }
 const fmtK = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'k' : v;
 
+// ---------- 채널 레벨 미터 (M1~M4 원시 진폭, 로그 스케일 바) ----------
+// LOG_LO~LOG_HI는 24bit(±8.4M) 신호에서 무음~풀스케일이 대략 들어오는 범위.
+// 정확한 dB 보정이 아니라 "죽은 채널은 안 움직인다"를 눈으로 보기 위한 용도.
+const LVL_LOG_LO = 2.5, LVL_LOG_HI = 6.9;
+function levelPct(v) {
+  if (v <= 0) return 0;
+  const lg = Math.log10(v);
+  return Math.max(0, Math.min(100, (lg - LVL_LOG_LO) / (LVL_LOG_HI - LVL_LOG_LO) * 100));
+}
+function updateLevels(rec) {
+  for (let i = 1; i <= 4; i++) {
+    const v = Number(rec['m' + i]) || 0;
+    $('lvBar' + i).style.width = levelPct(v).toFixed(0) + '%';
+    $('lvVal' + i).textContent = fmtK(v);
+  }
+}
+
 // ---------- 시리얼 라인 파서 ----------
 function parseLine(line) {
   // codex 펌웨어의 구조화 레코드. JSON이 아닌 기존 펌웨어 텍스트도 아래에서 계속 지원한다.
   if (line.startsWith('{')) {
     try {
       const record = JSON.parse(line);
+      if (record.type === 'levels') {
+        updateLevels(record);
+        return;
+      }
       if (record.type === 'doa') {
         if (dangerOnly) return;   // 위험만 모드: 화살표는 alert(위험 분류 융합)에서만
         if (record.phi !== null && record.phi !== undefined && Number.isFinite(Number(record.phi)))

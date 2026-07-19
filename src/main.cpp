@@ -359,6 +359,18 @@ static float processPair(const int32_t* buf, float* L, float* R, int n,
 #endif
 }
 
+// 채널별 원시 최대진폭 (밴드패스 이전) — 배선 접촉불량으로 채널이 죽었는지
+// 대시보드 레벨미터로 한눈에 확인하기 위한 용도. DOA 판정 경로와는 무관.
+static int32_t channelPeak(const int32_t* buf, int n, int slot) {
+  int32_t pk = 0;
+  for (int i = 0; i < n; i++) {
+    int32_t v = buf[2 * i + slot] >> 8;
+    if (v < 0) v = -v;
+    if (v > pk) pk = v;
+  }
+  return pk;
+}
+
 static float clampUnit(float v) {
   return v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
 }
@@ -461,6 +473,29 @@ void loop() {
   float lagX, lagY, confX, confY, corrX, corrY; bool okX, okY;
   float rmsX = processPair(bufX, Lx, Rx, nX, lagX, okX, confX, corrX);
   float rmsY = processPair(bufY, Ly, Ry, nY, lagY, okY, confY, corrY);
+
+  // ---- 채널별 레벨 미터 (대시보드용) ----
+  // DOA 판정과 무관하게 항상 계산·전송 — 촬영 전 4채널이 다 살아있는지
+  // 대시보드에서 눈으로 바로 확인하기 위함(전원선 접촉불량 재발 대비).
+  {
+    static int32_t pkM1 = 0, pkM2 = 0, pkM3 = 0, pkM4 = 0;
+    static uint32_t lastLevelsPrint = 0;
+    int32_t pM1 = channelPeak(bufX, nX, 0);   // M1 = X쌍 Left
+    int32_t pM2 = channelPeak(bufX, nX, 1);   // M2 = X쌍 Right
+    int32_t pM3 = channelPeak(bufY, nY, 0);   // M3 = Y쌍 Left
+    int32_t pM4 = channelPeak(bufY, nY, 1);   // M4 = Y쌍 Right
+    if (pM1 > pkM1) pkM1 = pM1;
+    if (pM2 > pkM2) pkM2 = pM2;
+    if (pM3 > pkM3) pkM3 = pM3;
+    if (pM4 > pkM4) pkM4 = pM4;
+    uint32_t nowMs = millis();
+    if (nowMs - lastLevelsPrint >= PRINT_MS) {
+      lastLevelsPrint = nowMs;
+      Serial.printf("{\"type\":\"levels\",\"m1\":%ld,\"m2\":%ld,\"m3\":%ld,\"m4\":%ld}\n",
+                    (long)pkM1, (long)pkM2, (long)pkM3, (long)pkM4);
+      pkM1 = pkM2 = pkM3 = pkM4 = 0;
+    }
+  }
 
   // 배선 부호와 중앙 음원에서 실측한 고정 지연 bias를 보정한다.
   lagX = lagX * LAG_SIGN_X - LAG_OFFSET_X;
