@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🔌 DOA 안경 배열 — 전체 배선표 (납땜용)</title>
+<style>
+  body{font-family:"Segoe UI","Malgun Gothic",sans-serif;background:#0b0f14;color:#e6edf3;
+    margin:0;padding:24px;line-height:1.6}
+  h1{font-size:1.4rem} h2{font-size:1.1rem;margin-top:28px;border-left:4px solid #4dabf7;padding-left:10px}
+  table{border-collapse:collapse;margin:10px 0;width:100%;max-width:720px}
+  th,td{border:1px solid #263140;padding:8px 14px;text-align:left}
+  th{background:#1b2836} tr:nth-child(even){background:#131a22}
+  .pin{font-family:Consolas,monospace;font-weight:700;color:#ffd43b}
+  .gnd{color:#8b98a8;font-weight:700} .vcc{color:#ff6b6b;font-weight:700}
+  .warn{background:#3d2418;border:1px solid #b8641e;border-radius:10px;padding:12px 16px;margin:14px 0;max-width:720px}
+  .ok{background:#14321c;border:1px solid #2f9e44;border-radius:10px;padding:12px 16px;margin:14px 0;max-width:720px}
+  .note{color:#8b98a8;font-size:.9rem}
+  @media print{body{background:#fff;color:#000} th{background:#eee} .warn{background:#fff3e0} .ok{background:#e8f5e9}}
+</style>
+</head>
+<body>
+<h1>🔌 DOA 안경 배열 — 전체 배선표 <span class="note">(2026-07-20 납땜 작업용)</span></h1>
+
+<div class="warn">⚡ <b>납땜 전 USB 뽑기!</b> 그리고 마이크 전원은 반드시 <b>스타 배선</b>(한 점에서 각자 분기) —
+공통노드 점퍼 빠짐으로 4채널 전멸했던 전례의 재발 방지가 이번 납땜의 최우선 목표.</div>
+
+<h2>① X쌍 — 좌우 마이크 (I2S0 공유 버스)</h2>
+<table>
+<tr><th>신호</th><th>ESP32-S3 핀</th><th>연결</th></tr>
+<tr><td>SCK (BCLK)</td><td class="pin">GPIO 4</td><td>왼쪽·오른쪽 마이크 <b>공유</b></td></tr>
+<tr><td>WS (LRCLK)</td><td class="pin">GPIO 5</td><td>왼쪽·오른쪽 마이크 <b>공유</b></td></tr>
+<tr><td>SD (DATA)</td><td class="pin">GPIO 6</td><td>왼쪽·오른쪽 마이크 <b>공유</b> (같은 선에 둘 다)</td></tr>
+<tr><td>왼쪽 마이크 L/R</td><td class="gnd">GND</td><td>Left 슬롯 지정</td></tr>
+<tr><td>오른쪽 마이크 L/R</td><td class="vcc">3V3</td><td>Right 슬롯 지정</td></tr>
+</table>
+
+<h2>② Y쌍 — 위(코쪽)·아래 마이크 (I2S1 공유 버스)</h2>
+<table>
+<tr><th>신호</th><th>ESP32-S3 핀</th><th>연결</th></tr>
+<tr><td>SCK (BCLK)</td><td class="pin">GPIO 15</td><td>위·아래 마이크 <b>공유</b></td></tr>
+<tr><td>WS (LRCLK)</td><td class="pin">GPIO 16</td><td>위·아래 마이크 <b>공유</b></td></tr>
+<tr><td>SD (DATA)</td><td class="pin">GPIO 17</td><td>위·아래 마이크 <b>공유</b></td></tr>
+<tr><td>위 마이크 L/R</td><td class="gnd">GND</td><td>Left 슬롯 지정</td></tr>
+<tr><td>아래 마이크 L/R</td><td class="vcc">3V3</td><td>Right 슬롯 지정</td></tr>
+</table>
+
+<h2>③ 마이크 4개 공통 전원</h2>
+<table>
+<tr><th>마이크 핀</th><th>연결</th><th>비고</th></tr>
+<tr><td>VDD</td><td class="vcc">3V3</td><td rowspan="2">보드에서 <b>별도 선으로 각 마이크에 직접</b>(스타).
+분기점이 필요하면 <b>납땜된 분기점</b>만 사용 — 브레드보드 공통노드 금지</td></tr>
+<tr><td>GND</td><td class="gnd">GND</td></tr>
+</table>
+
+<h2>④ IMU (MPU-9250 / 9255 / 6500)</h2>
+<table>
+<tr><th>IMU 핀</th><th>ESP32-S3 핀</th><th>비고</th></tr>
+<tr><td>VCC</td><td class="vcc">3V3</td><td>보드 3V3 핀에서 직접 (마이크 스타노드와 별개)</td></tr>
+<tr><td>GND</td><td class="gnd">GND</td><td></td></tr>
+<tr><td>SCL</td><td class="pin">GPIO 9</td><td></td></tr>
+<tr><td>SDA</td><td class="pin">GPIO 8</td><td></td></tr>
+<tr><td>AD0</td><td class="gnd">GND</td><td>I2C 주소 0x68 고정</td></tr>
+<tr><td colspan="3">⚠️ <b>헤더핀 자체 납땜 필수</b> — 오늘 두 번 끊긴 최대 말썽꾼</td></tr>
+</table>
+
+<h2>⑤ 규칙·주의</h2>
+<table>
+<tr><th>항목</th><th>내용</th></tr>
+<tr><td>금지 핀</td><td>GPIO 26~32, 33~37 (PSRAM 전용), 0 / 3 / 45 / 46 (스트래핑)</td></tr>
+<tr><td>배선 길이</td><td>I2S 신호선 40cm 이내, 마이크 쪽에 여유 고리(당김 방지)</td></tr>
+<tr><td>USB</td><td>보드 <b>위쪽 USB-C</b> = CH343(COM3) 사용</td></tr>
+<tr><td>L/R 핀</td><td>쌍 안에서 반드시 <b>하나는 GND, 하나는 3V3</b> — 절대 띄워두지 말 것(부유 금지)</td></tr>
+</table>
+
+<div class="ok">✅ <b>납땜 후 검증 순서</b> (Claude에게 "납땜완료"라고 말하면 진행):<br>
+① 조용한 상태 레벨 검사 (4채널 균등 확인) →
+② 4점 탭 테스트 (위치↔채널 지도 확정) →
+③ 수건 위 좌/우/위 박수 (방향·부호 최종 확정 — 부호는 소프트웨어 한 줄이라 배선을 어느 쪽으로 하든 OK)</div>
+
+<p class="note">※ 방향 부호(LAG_SIGN)는 납땜 결과에 맞춰 소프트웨어로 잡으므로, L/R을 표와 반대로 달았어도
+다시 지질 필요 없음 — 검증 단계에서 자동으로 맞춰짐.</p>
+</body>
+</html>
