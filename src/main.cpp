@@ -564,6 +564,13 @@ static void print2dEvent(uint32_t frame, float phi, float strength,
     corrX, corrY, confX, confY, vectorNorm, imuOk ? yawDeg : -1.0f);
 }
 
+// 장착 회전 보정 포함 0~360 정규화
+static float wrapPhi(float a) {
+  a = fmodf(a + PHI_OFFSET_DEG, 360.0f);
+  if (a < 0) a += 360.0f;
+  return a;
+}
+
 static void printAxisEvent(uint32_t frame, char axis, float lag, float strength,
                            float rms, float corrPeak, float conf) {
   float component = (lag / (float)SAMPLE_RATE) * SOUND_SPEED /
@@ -579,6 +586,8 @@ static void printAxisEvent(uint32_t frame, char axis, float lag, float strength,
     candidateB = 180.0f - candidateA;
     if (candidateB < 0) candidateB += 360.0f;
   }
+  candidateA = wrapPhi(candidateA);
+  candidateB = wrapPhi(candidateB);
   Serial.printf(
     "{\"type\":\"doa\",\"mode\":\"axis\",\"frame\":%lu,\"axis\":\"%c\","
     "\"phi\":null,\"candidateA\":%.1f,\"candidateB\":%.1f,\"strength\":%.0f,\"rms\":%.0f,"
@@ -646,7 +655,9 @@ void loop() {
   uint32_t currentFrame = ++frameNo;
 
 #if AUDIO_STREAM
-  streamAudio(bufX, nX);   // M1 원신호(광대역) → 노트북 분류기
+  streamAudio(bufY, nY);   // M3(Y쌍 L슬롯) 원신호 → 노트북 분류기
+                           // (2026-07-20 변경: Y 모듈 감도 ~4배 — 16bit 축소 시 원거리
+                           //  소리 보존 유리 + X쪽 마이크 상태 회피. 복귀는 bufX/nX로)
 #endif
   imuUpdate();             // yaw 적분 + 5Hz 스트림 (미장착 시 no-op)
 
@@ -758,8 +769,8 @@ void loop() {
       float vectorNorm = sqrtf(sx * sx + sy * sy);
       if (vectorNorm >= VECTOR_MIN_NORM && vectorNorm <= VECTOR_MAX_NORM) {
         // 표시는 수학 표준(0°=오른쪽, 90°=위, 반시계) → x축에 -sx
-        float phi = atan2f(sy, -sx) * 180.0f / PI;
-        if (phi < 0) phi += 360.0f;
+        // + 장착 회전 보정(PHI_OFFSET_DEG)
+        float phi = wrapPhi(atan2f(sy, -sx) * 180.0f / PI);
         print2dEvent(currentFrame, phi, evRmsX > evRmsY ? evRmsX : evRmsY,
                      evRmsX, evRmsY, evLagX, evLagY,
                      evCorrX, evCorrY, evConfX, evConfY, vectorNorm);
