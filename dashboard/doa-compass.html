@@ -143,6 +143,27 @@
 
   <!-- ===== 사이드 ===== -->
   <div class="side">
+    <!-- IMU 현재 방향 (yaw 수신 시 자동 표시) — 바늘이 실제 회전을 1:1로 따라 돈다 -->
+    <div class="card" id="imuCard" style="display:none">
+      <h2>🧭 기기 방향 (IMU)</h2>
+      <div style="display:flex;align-items:center;gap:16px">
+        <svg width="92" height="92" viewBox="-46 -46 92 92">
+          <circle r="41" fill="#0e141c" stroke="#263140" stroke-width="1.5"/>
+          <line x1="0" y1="-36" x2="0" y2="-41" stroke="#55637a" stroke-width="2"/>
+          <line x1="36" y1="0" x2="41" y2="0" stroke="#33415580" stroke-width="1.5"/>
+          <line x1="-36" y1="0" x2="-41" y2="0" stroke="#33415580" stroke-width="1.5"/>
+          <line x1="0" y1="36" x2="0" y2="41" stroke="#33415580" stroke-width="1.5"/>
+          <g id="imuNeedle">
+            <path d="M0,-33 L8,11 L0,4 L-8,11 Z" fill="#51cf66cc" stroke="#b2f2bb" stroke-width="1"/>
+          </g>
+          <circle r="3.5" fill="#8b98a8"/>
+        </svg>
+        <div>
+          <div id="imuYawTx" style="font-size:1.7rem;font-weight:800;font-variant-numeric:tabular-nums">--°</div>
+          <div class="hint">부팅 위치 기준 회전각<br>화살표는 이만큼 역보정됨</div>
+        </div>
+      </div>
+    </div>
     <div class="card">
       <h2>📶 채널 레벨 <span style="font-weight:400">— 촬영 전 4개 다 살아있는지 톡톡 쳐서 확인</span></h2>
       <div class="levelRow"><span class="lvLabel">M1 왼쪽</span><span class="bar"><div id="lvBar1"></div></span><span class="lvVal" id="lvVal1">0</span></div>
@@ -524,6 +545,10 @@ function parseLine(line) {
         if (Number.isFinite(Number(record.yaw)) && Number(record.yaw) >= 0) {
           curYaw = Number(record.yaw);
           document.getElementById('imuBadge').style.display = '';
+          // 현재 방향 위젯: 바늘이 실제 회전을 1:1로 따라 돈다 (반시계 = +yaw)
+          document.getElementById('imuCard').style.display = '';
+          document.getElementById('imuNeedle').setAttribute('transform', `rotate(${-curYaw})`);
+          document.getElementById('imuYawTx').textContent = curYaw.toFixed(0) + '°';
         }
         return;
       }
