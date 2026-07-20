@@ -350,9 +350,13 @@ let ringCenterEv = null;
   }
 })();
 
-function spawnRing(phi, label, danger) {
+function spawnRing(phi, label, danger, evYaw) {
   const now = performance.now();
   const color = danger ? '#ff6b6b' : '#4dabf7';
+  // IMU가 있으면 세계좌표로 고정: 칸/잔상을 발생 시점 세계 각도에 배치하고,
+  // 컨테이너를 -현재yaw만큼 회전시켜 기기가 돌아도 방향 유지 (화살표와 동일 원리)
+  const yawRef = (Number.isFinite(evYaw) && evYaw >= 0) ? evYaw : curYaw;
+  if (yawRef != null) phi = ((phi + yawRef) % 360 + 360) % 360;
   const idx = Math.round(phi / (360/RING_N)) % RING_N;
   [[idx, 1], [(idx+1)%RING_N, 0.35], [(idx+RING_N-1)%RING_N, 0.35]].forEach(([k, peak]) => {
     const s = ringGlow[k];
@@ -456,7 +460,7 @@ function showEvent(phi, strength, details = null) {
                     (details.top && details.top[0] && details.top[0].danger)));
   const label = (details && details.labelKo) ? details.labelKo : '🔊 소리';
   spawnArrow(phi, label, danger, details ? Number(details.yaw) : NaN);
-  spawnRing(phi, label, danger);
+  spawnRing(phi, label, danger, details ? Number(details.yaw) : NaN);
   // 4방향 패널: 가장 가까운 기본 방향(0/90/180/270)의 패널 점등
   lrFlash(['R', 'U', 'L', 'D'][Math.round(phi / 90) % 4]);
 
@@ -556,7 +560,7 @@ function parseLine(line) {
             }
             if (axPhi !== null) {
               spawnArrow(axPhi, axLabel, false, Number(record.yaw));
-              spawnRing(axPhi, axLabel, false);
+              spawnRing(axPhi, axLabel, false, Number(record.yaw));
               if (record.axis === 'x') lrFlash(axPhi === 180 ? 'L' : 'R');
               else if (record.axis === 'y') lrFlash(axPhi === 90 ? 'U' : 'D');
             }
@@ -608,6 +612,9 @@ function parseLine(line) {
         if (Number.isFinite(Number(record.yaw)) && Number(record.yaw) >= 0) {
           curYaw = Number(record.yaw);
           document.getElementById('imuBadge').style.display = '';
+          // 링 뷰 세계좌표 고정: 칸·잔상 컨테이너를 -현재yaw만큼 회전
+          $('ringSegs').setAttribute('transform', `rotate(${curYaw.toFixed(1)})`);
+          $('ringHist').setAttribute('transform', `rotate(${curYaw.toFixed(1)})`);
           // 현재 방향 위젯: 바늘이 실제 회전을 1:1로 따라 돈다 (반시계 = +yaw)
           document.getElementById('imuCard').style.display = '';
           document.getElementById('imuNeedle').setAttribute('transform', `rotate(${-curYaw})`);
