@@ -41,7 +41,8 @@ CLIENT_QUEUE_SIZE = 100
 clients = set()
 clients_lock = threading.Lock()
 latest_status = "::status:: 서버 시작됨 — 시리얼 연결 대기 중"
-ser_handle = None   # 열린 시리얼 포트 (yaw 영점 등 명령 전송용)
+ser_handle = None   # 명령 전송 핸들: 시리얼 포트 또는 소켓 어댑터
+NET = None          # "--net host[:port]" 지정 시 (호스트, 포트) — 무선 모드
 latest_class_status = None   # 마지막 class_status JSON — 늦게 접속한 브라우저에도 전달
 classifier = None   # main에서 초기화 (없어도 서버는 정상 동작)
 
@@ -202,6 +203,58 @@ def broadcast(line: str):
                     pass
 
 
+def process_line(line: str):
+    """수신 라인 1개 처리 (시리얼/무선 공용)."""
+    if not line:
+        return
+    # 오디오 스트림은 브라우저로 중계하지 않고 분류기에만 공급 (대역폭 절약)
+    if line.startswith('{"type":"audio"'):
+        if classifier is not None:
+            classifier.feed_line(line)
+        return
+    if line.startswith('{"type":"doa"'):
+        if remember_doa(line):   # 습관화/플립가드 억제 시 중계 생략
+            return
+    broadcast(line)
+
+
+def net_thread():
+    """ESP32의 WiFi TCP 서버(doa-node.local:9000)에 접속해 라인 스트림 수신."""
+    global ser_handle
+    host, port = NET
+    while True:
+        try:
+            sock = socket.create_connection((host, port), timeout=8)
+            sock.settimeout(20)
+
+            class _Cmd:                      # /zeroyaw 등 명령용 어댑터
+                def write(self, b):
+                    sock.sendall(b)
+            ser_handle = _Cmd()
+            print(f"[net] {host}:{port} 연결됨 (무선)")
+            broadcast("::status:: 무선(WiFi) 연결됨 — 듣는 중")
+            acc = bytearray()
+            while True:
+                chunk = sock.recv(16384)
+                if not chunk:
+                    raise ConnectionError("원격 종료")
+                acc += chunk
+                if len(acc) > 1_000_000:
+                    del acc[:-4096]
+                while True:
+                    nl = acc.find(b"\n")
+                    if nl < 0:
+                        break
+                    raw = acc[:nl]
+                    del acc[:nl + 1]
+                    process_line(raw.decode("utf-8", errors="replace").strip())
+        except Exception as e:
+            ser_handle = None
+            print(f"[net] {host}:{port} 재접속 대기… ({e})")
+            broadcast(f"::status:: 무선 재접속 중… ({host})")
+            time.sleep(3)
+
+
 def serial_thread():
     """COM 포트를 계속 재시도하며 읽어서 전 클라이언트에 중계."""
     while True:
@@ -241,18 +294,7 @@ def serial_thread():
                             break
                         raw = acc[:nl]
                         del acc[:nl + 1]
-                        line = raw.decode("utf-8", errors="replace").strip()
-                        if not line:
-                            continue
-                        # 오디오 스트림은 브라우저로 중계하지 않고 분류기에만 공급 (대역폭 절약)
-                        if line.startswith('{"type":"audio"'):
-                            if classifier is not None:
-                                classifier.feed_line(line)
-                            continue
-                        if line.startswith('{"type":"doa"'):
-                            if remember_doa(line):   # 지속 소음 방향이면 중계도 생략
-                                continue
-                        broadcast(line)
+                        process_line(raw.decode("utf-8", errors="replace").strip())
                     now = time.time()
                     if now - last_lag_check >= 5.0:
                         last_lag_check = now
@@ -408,6 +450,8 @@ def parse_args():
     parser.add_argument("--port", type=int, default=int(os.getenv("DOA_PORT", PORT)))
     parser.add_argument("--no-classify", action="store_true",
                         help="YAMNet 소리 분류 끄기 (TF 미설치 환경 등)")
+    parser.add_argument("--net", default=os.getenv("DOA_NET", ""),
+                        help="무선 모드: ESP32 주소 (예: doa-node.local 또는 192.168.0.50:9000)")
     return parser.parse_args()
 
 
@@ -428,9 +472,15 @@ if __name__ == "__main__":
         latest_class_status = json.dumps(
             {"type": "class_status", "ready": False, "error": "--no-classify로 꺼짐"},
             ensure_ascii=False)
-    threading.Thread(target=serial_thread, daemon=True).start()
+    if args.net:
+        h, _, p = args.net.partition(":")
+        NET = (h, int(p) if p else 9000)
+        threading.Thread(target=net_thread, daemon=True).start()
+        print(f"[net] 무선 모드: {NET[0]}:{NET[1]} 접속 시도")
+    else:
+        threading.Thread(target=serial_thread, daemon=True).start()
     print("=" * 50)
-    print("  🧭 DOA 대시보드 중계 서버")
+    print("  🧭 DOA 대시보드 중계 서버" + ("  (무선 모드)" if args.net else ""))
     print(f"  PC   : http://localhost:{PORT}")
     for i, ip in enumerate(lan_ips()):
         tag = "iPad : " if i == 0 else "  또는 "

@@ -16,6 +16,53 @@
 #include <Wire.h>
 #include "mbedtls/base64.h"
 #include "pins.h"
+#include "wifi_secrets.h"
+#if ENABLE_WIFI
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#endif
+
+// ---- 출력 추상화 ----
+// 데이터 스트림(오디오/doa/imu/levels)의 출구. 기본은 USB 시리얼,
+// WiFi 클라이언트(serve.py --net)가 붙으면 TCP로 전환, 끊기면 시리얼 복귀.
+static Print* OUT = &Serial;
+#if ENABLE_WIFI
+static WiFiServer netServer(9000);
+static WiFiClient netClient;
+
+static void wifiInit() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);            // 스트리밍 지연 편차 방지
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.printf("{\"type\":\"net\",\"status\":\"connecting\",\"ssid\":\"%s\"}\n", WIFI_SSID);
+}
+
+static void wifiUpdate() {
+  static bool started = false;
+  if (!started && WiFi.status() == WL_CONNECTED) {
+    started = true;
+    netServer.begin();
+    netServer.setNoDelay(true);
+    MDNS.begin("doa-node");        // serve.py --net doa-node.local
+    Serial.printf("{\"type\":\"net\",\"status\":\"ready\",\"ip\":\"%s\",\"port\":9000}\n",
+                  WiFi.localIP().toString().c_str());
+  }
+  if (!started) return;
+  if (!netClient || !netClient.connected()) {
+    if (OUT != &Serial) {
+      OUT = &Serial;               // 클라이언트 끊김 → USB 폴백
+      Serial.println("{\"type\":\"net\",\"status\":\"client_lost\"}");
+    }
+    WiFiClient c = netServer.available();
+    if (c) {
+      netClient = c;
+      netClient.setNoDelay(true);
+      OUT = &netClient;
+      Serial.println("{\"type\":\"net\",\"status\":\"client_connected\"}");
+    }
+  }
+}
+#endif
 
 #define FRAMES 1024
 static int32_t bufX[FRAMES * 2];
@@ -107,10 +154,10 @@ static void streamAudio(const int32_t* buf, int n) {
   if (mbedtls_base64_encode(audioB64, sizeof(audioB64), &olen,
                             (const unsigned char*)audioPcm,
                             (size_t)m * 2) != 0) return;
-  Serial.printf("{\"type\":\"audio\",\"seq\":%lu,\"sr\":%d,\"n\":%d,\"data\":\"",
-                (unsigned long)audioSeq++, SAMPLE_RATE / AUDIO_DECIM, m);
-  Serial.write(audioB64, olen);
-  Serial.println("\"}");
+  OUT->printf("{\"type\":\"audio\",\"seq\":%lu,\"sr\":%d,\"n\":%d,\"data\":\"",
+              (unsigned long)audioSeq++, SAMPLE_RATE / AUDIO_DECIM, m);
+  OUT->write(audioB64, olen);
+  OUT->println("\"}");
 }
 #endif
 
@@ -204,7 +251,7 @@ static void imuUpdate() {
   uint32_t ms = millis();
   if (ms - imuLastPrint >= 200) {                    // 대시보드 회전 보정용 5Hz 스트림
     imuLastPrint = ms;
-    Serial.printf("{\"type\":\"imu\",\"yaw\":%.1f}\n", yawDeg);
+    OUT->printf("{\"type\":\"imu\",\"yaw\":%.1f}\n", yawDeg);
   }
 }
 
@@ -555,7 +602,7 @@ static void print2dEvent(uint32_t frame, float phi, float strength,
                          float rmsX, float rmsY, float lagX, float lagY,
                          float corrX, float corrY, float confX, float confY,
                          float vectorNorm) {
-  Serial.printf(
+  OUT->printf(
     "{\"type\":\"doa\",\"mode\":\"2d\",\"frame\":%lu,\"phi\":%.1f,"
     "\"strength\":%.0f,\"rmsX\":%.0f,\"rmsY\":%.0f,\"lagX\":%.3f,\"lagY\":%.3f,"
     "\"corrX\":%.3f,\"corrY\":%.3f,\"confX\":%.3f,\"confY\":%.3f,\"vectorNorm\":%.3f,"
@@ -588,7 +635,7 @@ static void printAxisEvent(uint32_t frame, char axis, float lag, float strength,
   }
   candidateA = wrapPhi(candidateA);
   candidateB = wrapPhi(candidateB);
-  Serial.printf(
+  OUT->printf(
     "{\"type\":\"doa\",\"mode\":\"axis\",\"frame\":%lu,\"axis\":\"%c\","
     "\"phi\":null,\"candidateA\":%.1f,\"candidateB\":%.1f,\"strength\":%.0f,\"rms\":%.0f,"
     "\"lag\":%.3f,\"corr\":%.3f,\"conf\":%.3f,\"yaw\":%.1f}\n",
@@ -610,6 +657,9 @@ void setup() {
   fftInit();
 #endif
   imuInit();   // IMU 미장착이어도 안전 (absent 판정 후 비활성)
+#if ENABLE_WIFI
+  wifiInit();  // 논블로킹 — 연결 완료는 loop의 wifiUpdate()에서 처리
+#endif
 
   Serial.println("\n=== DOA 3단계: 2D 십자 배열 (좌우 + 상하, 360°) ===");
 #if USE_PHAT
@@ -654,14 +704,27 @@ void loop() {
   if (nX < FRAMES || nY < FRAMES) return;
   uint32_t currentFrame = ++frameNo;
 
-  // 시리얼 명령: 'Z' = 현재 자세를 yaw 영점으로 (착용 정자세 기준 설정)
+#if ENABLE_WIFI
+  wifiUpdate();
+#endif
+
+  // 명령 수신 (USB + WiFi 공용): 'Z' = 현재 자세를 yaw 영점으로
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == 'Z' || c == 'z') {
       yawDeg = 0.0f;
-      Serial.println("{\"type\":\"imu\",\"status\":\"zeroed\",\"yaw\":0.0}");
+      OUT->println("{\"type\":\"imu\",\"status\":\"zeroed\",\"yaw\":0.0}");
     }
   }
+#if ENABLE_WIFI
+  while (netClient && netClient.connected() && netClient.available()) {
+    char c = (char)netClient.read();
+    if (c == 'Z' || c == 'z') {
+      yawDeg = 0.0f;
+      OUT->println("{\"type\":\"imu\",\"status\":\"zeroed\",\"yaw\":0.0}");
+    }
+  }
+#endif
 
 #if AUDIO_STREAM
   streamAudio(bufY, nY);   // M3(Y쌍 L슬롯) 원신호 → 노트북 분류기
@@ -693,8 +756,8 @@ void loop() {
     uint32_t nowMs = millis();
     if (nowMs - lastLevelsPrint >= PRINT_MS) {
       lastLevelsPrint = nowMs;
-      Serial.printf("{\"type\":\"levels\",\"m1\":%ld,\"m2\":%ld,\"m3\":%ld,\"m4\":%ld}\n",
-                    (long)pkM1, (long)pkM2, (long)pkM3, (long)pkM4);
+      OUT->printf("{\"type\":\"levels\",\"m1\":%ld,\"m2\":%ld,\"m3\":%ld,\"m4\":%ld}\n",
+                  (long)pkM1, (long)pkM2, (long)pkM3, (long)pkM4);
       pkM1 = pkM2 = pkM3 = pkM4 = 0;
     }
   }

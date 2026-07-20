@@ -4,3 +4,4 @@ __pycache__/
 *.py[cod]
 tools/*.wav
 dashboard/custom_sounds.json
+include/wifi_secrets.h
