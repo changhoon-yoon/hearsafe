@@ -394,9 +394,30 @@ class Handler(BaseHTTPRequestHandler):
             items = [] if classifier is None else [
                 {"name": c["name"], "labelKo": c["labelKo"], "danger": c["danger"],
                  "takes": len(c.get("embeddings", [])),
-                 "threshold": c.get("threshold", 0.72)}
+                 "threshold": c.get("threshold", 0.72),
+                 "clip": bool(c.get("clip"))}
                 for c in classifier.custom]
             self._json({"ok": True, "sounds": items})
+
+        elif self.path.startswith("/clip"):
+            # 등록 소리 미리듣기 WAV 제공
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            name = (qs.get("name") or [""])[0]
+            entry = next((c for c in (classifier.custom if classifier else [])
+                          if c["name"] == name), None)
+            path = (os.path.join(classifier.clip_dir, entry["clip"])
+                    if entry and entry.get("clip") else None)
+            if not path or not os.path.exists(path):
+                self.send_response(404)
+                self.end_headers()
+                return
+            with open(path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         elif self.path.startswith("/unregister"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)

@@ -13,6 +13,7 @@ import json
 import os
 import threading
 import time
+import wave
 
 import numpy as np
 
@@ -96,6 +97,10 @@ class SoundClassifier:
         # 사용자 소리 등록(few-shot 지문): 등록된 소리의 YAMNet 임베딩 목록
         self.custom_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "custom_sounds.json")
+        # 등록 소리 미리듣기용 WAV 보관 폴더 (지문과 별개, 사람이 확인하는 용도)
+        self.clip_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "custom_clips")
+        os.makedirs(self.clip_dir, exist_ok=True)
         self.custom = self._load_custom()
         self.capture = None   # 등록 녹음 진행 상태
         threading.Thread(target=self._load, daemon=True).start()
@@ -244,6 +249,18 @@ class SoundClassifier:
             self.custom.append(entry)
         entry["embeddings"] = (entry["embeddings"] + [v])[-10:]   # 테이크 최대 10개
         entry["danger"] = cap["danger"]
+        # 미리듣기용 WAV 저장 (마지막 등록분) — 사용자가 무엇을 등록했는지 귀로 확인
+        try:
+            clip = os.path.join(self.clip_dir, self._clip_name(cap["name"]))
+            pcm = np.clip(x * 32767.0, -32768, 32767).astype("<i2")
+            with wave.open(clip, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(self.sr)
+                w.writeframes(pcm.tobytes())
+            entry["clip"] = os.path.basename(clip)
+        except Exception as e:
+            print(f"[custom] 미리듣기 저장 실패: {e}")
         self._save_custom()
         print(f"[custom] '{cap['name']}' 등록 (테이크 {len(entry['embeddings'])}개, RMS {rms:.3f})")
         cap["result"] = {"ok": True, "name": cap["name"],
@@ -272,8 +289,20 @@ class SoundClassifier:
             # 문턱 튜닝용: 아깝게 미달한 유사도를 서버 콘솔에 보여준다
             print(f"[custom] {best_c['name']} 유사도 {best_sim:.2f} — 문턱 {th} 미달")
 
+    @staticmethod
+    def _clip_name(name):
+        """파일명 안전화 — 한글은 유지, 경로 문자만 제거."""
+        safe = "".join(ch for ch in name if ch not in '\\/:*?"<>|').strip()
+        return (safe or "sound") + ".wav"
+
     def remove_custom(self, name):
         before = len(self.custom)
         self.custom = [c for c in self.custom if c["name"] != name]
         self._save_custom()
+        try:
+            clip = os.path.join(self.clip_dir, self._clip_name(name))
+            if os.path.exists(clip):
+                os.remove(clip)
+        except Exception:
+            pass
         return before - len(self.custom)

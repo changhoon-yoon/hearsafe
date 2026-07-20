@@ -48,6 +48,11 @@
   .log .bar>div{height:100%;background:linear-gradient(90deg,var(--acc),var(--hot));border-radius:3px}
   .hint{font-size:.8rem;color:var(--sub);line-height:1.6}
   .hint code{background:#0b1020;padding:1px 6px;border-radius:5px;color:#ffa657}
+  .custRow{display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid #1c2530;font-size:.9rem}
+  .custRow .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .custRow .meta{color:var(--sub);font-size:.75rem}
+  .custRow button{padding:3px 9px;font-size:.75rem;border-radius:7px}
+  .custRow .del:hover{background:#3d1418;border-color:var(--hot)}
   .levelRow{display:flex;align-items:center;gap:10px;padding:6px 0}
   .levelRow:not(:last-child){border-bottom:1px solid #1c2530}
   .lvLabel{width:70px;font-size:.82rem;color:var(--sub)}
@@ -192,6 +197,12 @@
       <div class="levelRow"><span class="lvLabel">M2 오른쪽</span><span class="bar"><div id="lvBar2"></div></span><span class="lvVal" id="lvVal2">0</span></div>
       <div class="levelRow"><span class="lvLabel">M3 위</span><span class="bar"><div id="lvBar3"></div></span><span class="lvVal" id="lvVal3">0</span></div>
       <div class="levelRow"><span class="lvLabel">M4 아래</span><span class="bar"><div id="lvBar4"></div></span><span class="lvVal" id="lvVal4">0</span></div>
+    </div>
+    <!-- 등록한 나만의 소리 관리 -->
+    <div class="card">
+      <h2>📌 등록한 소리 <span style="font-weight:400">— 듣기 / 삭제</span>
+        <button id="btnCustRefresh" style="float:right;padding:2px 10px;font-size:.75rem">새로고침</button></h2>
+      <ul class="log" id="custList" style="max-height:220px"><li style="color:var(--sub)">불러오는 중…</li></ul>
     </div>
     <div class="card">
       <h2>📋 이벤트 로그</h2>
@@ -719,6 +730,51 @@ if (!location.protocol.startsWith('http')) {
   $('btnZero').style.display = 'none';
   $('btnImu').style.display = 'none';
 }
+// ---------- 등록한 소리 관리 (목록·미리듣기·삭제) ----------
+let custAudio = null;
+async function loadCustoms() {
+  const ul = $('custList');
+  if (!location.protocol.startsWith('http')) { ul.innerHTML = '<li style="color:var(--sub)">서버 모드에서만 사용 가능</li>'; return; }
+  try {
+    const r = await (await fetch('/customs')).json();
+    const list = r.sounds || [];
+    if (!list.length) { ul.innerHTML = '<li style="color:var(--sub)">등록된 소리 없음 — ➕ 소리 등록으로 추가</li>'; return; }
+    ul.innerHTML = '';
+    for (const s of list) {
+      const li = document.createElement('li');
+      li.className = 'custRow';
+      li.innerHTML = `<span class="nm">${s.labelKo || s.name}${s.danger ? ' <span style="color:var(--hot)">위험</span>' : ''}
+                        <span class="meta">테이크 ${s.takes}</span></span>`;
+      const play = document.createElement('button');
+      play.textContent = s.clip ? '▶ 듣기' : '▶ 없음';
+      play.disabled = !s.clip;
+      play.title = s.clip ? '등록된 소리 재생' : '이 소리는 미리듣기 저장 전에 등록됨 — 재등록하면 생김';
+      play.addEventListener('click', () => {
+        if (custAudio) custAudio.pause();
+        custAudio = new Audio('/clip?name=' + encodeURIComponent(s.name));
+        custAudio.play().catch(e => setStatus('', '재생 실패: ' + e));
+      });
+      const del = document.createElement('button');
+      del.textContent = '🗑';
+      del.className = 'del';
+      del.title = '이 소리 등록 삭제';
+      del.addEventListener('click', async () => {
+        if (!confirm(`"${s.labelKo || s.name}" 등록을 삭제할까요?`)) return;
+        try {
+          await fetch('/unregister?name=' + encodeURIComponent(s.name));
+          loadCustoms();
+        } catch (e) { setStatus('', '삭제 실패: ' + e); }
+      });
+      li.appendChild(play); li.appendChild(del);
+      ul.appendChild(li);
+    }
+  } catch (e) {
+    ul.innerHTML = `<li style="color:var(--sub)">목록 실패: ${e}</li>`;
+  }
+}
+$('btnCustRefresh').addEventListener('click', loadCustoms);
+if (location.protocol.startsWith('http')) loadCustoms();
+
 $('btnImu').addEventListener('click', async () => {
   setStatus('listen', '🔄 IMU 재연결 시도 중…');
   try {
@@ -745,6 +801,7 @@ $('btnReg').addEventListener('click', async () => {
   alert(r.ok
     ? `✅ "${name}" 등록 완료 — 테이크 ${r.takes}개 (녹음 세기 ${r.rms})\n이제 같은 소리를 다시 내서 인식되는지 확인해보세요.`
     : `❌ 등록 실패: ${r.error}`);
+  loadCustoms();   // 목록 갱신 (등록 소리 듣기/삭제 패널)
 });
 
 // ---------- SSE 중계 모드 (serve.py로 http 접속 시 자동 활성) ----------
