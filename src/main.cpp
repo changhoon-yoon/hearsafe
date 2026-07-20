@@ -194,10 +194,13 @@ static float imuReadGzDps() {
 }
 
 static void imuInit() {
-  Wire.begin(PIN_IMU_SDA, PIN_IMU_SCL, 400000);
+  static bool wireStarted = false;
+  if (!wireStarted) { Wire.begin(PIN_IMU_SDA, PIN_IMU_SCL, 400000); wireStarted = true; }
+  imuOk = false;
   uint8_t who = 0;
   if (!imuRead(0x75, &who, 1)) {                     // WHO_AM_I — 응답 없으면 미장착
-    Serial.println("{\"type\":\"imu\",\"status\":\"absent\"}");
+    // 부팅 직후엔 아직 TCP 미연결이라 OUT=Serial. 무선 재시도('I' 명령) 때는 TCP로 나감.
+    OUT->println("{\"type\":\"imu\",\"status\":\"absent\"}");
     return;
   }
   imuWrite8(0x6B, 0x01);   // PWR_MGMT_1: sleep 해제, PLL 클럭
@@ -213,14 +216,14 @@ static void imuInit() {
     delay(5);
   }
   if (n < 60) {
-    Serial.println("{\"type\":\"imu\",\"status\":\"unstable\"}");
+    OUT->println("{\"type\":\"imu\",\"status\":\"unstable\"}");
     return;
   }
   gzBias = sum / n;
   imuOk = true;
   imuLastUs = micros();
-  Serial.printf("{\"type\":\"imu\",\"status\":\"ready\",\"who\":%u,\"bias\":%.2f}\n",
-                (unsigned)who, gzBias);
+  OUT->printf("{\"type\":\"imu\",\"status\":\"ready\",\"who\":%u,\"bias\":%.2f}\n",
+              (unsigned)who, gzBias);
 }
 
 static void imuUpdate() {
@@ -708,22 +711,19 @@ void loop() {
   wifiUpdate();
 #endif
 
-  // 명령 수신 (USB + WiFi 공용): 'Z' = 현재 자세를 yaw 영점으로
-  while (Serial.available()) {
-    char c = (char)Serial.read();
+  // 명령 수신 (USB + WiFi 공용): 'Z' = yaw 영점, 'I' = IMU 재초기화·진단
+  auto handleCmd = [](char c) {
     if (c == 'Z' || c == 'z') {
       yawDeg = 0.0f;
       OUT->println("{\"type\":\"imu\",\"status\":\"zeroed\",\"yaw\":0.0}");
+    } else if (c == 'I' || c == 'i') {
+      imuInit();   // 접촉 복구 후 RST 없이 무선으로 재시도 — 결과가 현재 출구로 나감
     }
-  }
+  };
+  while (Serial.available()) handleCmd((char)Serial.read());
 #if ENABLE_WIFI
-  while (netClient && netClient.connected() && netClient.available()) {
-    char c = (char)netClient.read();
-    if (c == 'Z' || c == 'z') {
-      yawDeg = 0.0f;
-      OUT->println("{\"type\":\"imu\",\"status\":\"zeroed\",\"yaw\":0.0}");
-    }
-  }
+  while (netClient && netClient.connected() && netClient.available())
+    handleCmd((char)netClient.read());
 #endif
 
 #if AUDIO_STREAM

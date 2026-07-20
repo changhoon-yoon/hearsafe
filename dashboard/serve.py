@@ -368,6 +368,17 @@ class Handler(BaseHTTPRequestHandler):
                 broadcast("::status:: 시리얼 연결됨 — 듣는 중")
             self._json(body)
 
+        elif self.path == "/imuretry":
+            # IMU 재초기화 요청 — 접촉 복구 후 RST 없이 무선으로 재시도
+            if ser_handle is not None:
+                try:
+                    ser_handle.write(b"I")
+                    self._json({"ok": True})
+                except Exception as e:
+                    self._json({"ok": False, "error": str(e)[:80]})
+            else:
+                self._json({"ok": False, "error": "장치 미연결"})
+
         elif self.path == "/zeroyaw":
             # 현재 자세를 IMU yaw 영점으로 — 착용 정자세 기준 설정
             if ser_handle is not None:
