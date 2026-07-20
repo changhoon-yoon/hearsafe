@@ -88,6 +88,7 @@
   <button id="btnFilter" title="켜면 사이렌·화재경보 등 위험 소리일 때만 화살표가 움직입니다">🚨 위험만: ON</button>
   <button id="btnView" title="화살표 대신 시계 베젤처럼 방향 칸이 점등되는 뷰로 전환">⭕ 링 뷰</button>
   <button id="btnReg" title="지금 나는 소리를 6초 녹음해 나만의 소리로 등록 (서버 모드 전용)">➕ 소리 등록</button>
+  <button id="btnZero" title="지금 자세를 기기 방향 기준(0°)으로 설정 — 착용 후 정면을 보고 누르세요">🧭 영점</button>
   <button class="primary" id="btnConnect">🔌 시리얼 연결</button>
   <button id="btnDemo">🎬 데모</button>
 </div>
@@ -694,7 +695,16 @@ async function readLoop() {
 }
 
 // ---------- 사용자 소리 등록 (서버 모드 전용) ----------
-if (!location.protocol.startsWith('http')) $('btnReg').style.display = 'none';
+if (!location.protocol.startsWith('http')) {
+  $('btnReg').style.display = 'none';
+  $('btnZero').style.display = 'none';
+}
+$('btnZero').addEventListener('click', async () => {
+  try {
+    const r = await (await fetch('/zeroyaw')).json();
+    setStatus('listen', r.ok ? '🧭 영점 설정됨 — 지금 자세가 기준(0°)' : '영점 실패: ' + r.error);
+  } catch (e) { setStatus('', '영점 실패: ' + e); }
+});
 $('btnReg').addEventListener('click', async () => {
   const name = prompt('등록할 소리 이름 (예: 밥솥 완료)');
   if (!name) return;

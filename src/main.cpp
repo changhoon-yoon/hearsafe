@@ -654,6 +654,15 @@ void loop() {
   if (nX < FRAMES || nY < FRAMES) return;
   uint32_t currentFrame = ++frameNo;
 
+  // 시리얼 명령: 'Z' = 현재 자세를 yaw 영점으로 (착용 정자세 기준 설정)
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == 'Z' || c == 'z') {
+      yawDeg = 0.0f;
+      Serial.println("{\"type\":\"imu\",\"status\":\"zeroed\",\"yaw\":0.0}");
+    }
+  }
+
 #if AUDIO_STREAM
   streamAudio(bufY, nY);   // M3(Y쌍 L슬롯) 원신호 → 노트북 분류기
                            // (2026-07-20 변경: Y 모듈 감도 ~4배 — 16bit 축소 시 원거리

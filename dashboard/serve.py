@@ -41,6 +41,7 @@ CLIENT_QUEUE_SIZE = 100
 clients = set()
 clients_lock = threading.Lock()
 latest_status = "::status:: 서버 시작됨 — 시리얼 연결 대기 중"
+ser_handle = None   # 열린 시리얼 포트 (yaw 영점 등 명령 전송용)
 latest_class_status = None   # 마지막 class_status JSON — 늦게 접속한 브라우저에도 전달
 classifier = None   # main에서 초기화 (없어도 서버는 정상 동작)
 
@@ -214,6 +215,8 @@ def serial_thread():
             sp.rts = False
             sp.open()
             with sp:
+                global ser_handle
+                ser_handle = sp
                 print(f"[serial] {COM} 연결됨")
                 broadcast("::status:: 시리얼 연결됨 — 듣는 중")
                 try:
@@ -257,6 +260,7 @@ def serial_thread():
                         if lag > 16384:
                             print(f"[serial] 경고: 수신 밀림 {lag}B (~{lag / 60000:.1f}초 지연)")
         except Exception as e:
+            ser_handle = None
             print(f"[serial] {COM} 대기 중… ({e})")
             broadcast(f"::status:: 시리얼 대기 중 ({COM} 사용 불가 — 다른 프로그램이 잡고 있나?)")
             time.sleep(2)
@@ -321,6 +325,17 @@ class Handler(BaseHTTPRequestHandler):
                 body = classifier.start_capture(name, ko, danger, min(max(sec, 2.0), 15.0))
                 broadcast("::status:: 시리얼 연결됨 — 듣는 중")
             self._json(body)
+
+        elif self.path == "/zeroyaw":
+            # 현재 자세를 IMU yaw 영점으로 — 착용 정자세 기준 설정
+            if ser_handle is not None:
+                try:
+                    ser_handle.write(b"Z")
+                    self._json({"ok": True})
+                except Exception as e:
+                    self._json({"ok": False, "error": str(e)[:80]})
+            else:
+                self._json({"ok": False, "error": "시리얼 미연결"})
 
         elif self.path == "/customs":
             items = [] if classifier is None else [
