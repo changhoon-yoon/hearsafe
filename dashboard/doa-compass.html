@@ -89,6 +89,7 @@
   <button id="btnView" title="화살표 대신 시계 베젤처럼 방향 칸이 점등되는 뷰로 전환">⭕ 링 뷰</button>
   <button id="btnReg" title="지금 나는 소리를 6초 녹음해 나만의 소리로 등록 (서버 모드 전용)">➕ 소리 등록</button>
   <button id="btnZero" title="지금 자세를 기기 방향 기준(0°)으로 설정 — 착용 후 정면을 보고 누르세요">🧭 영점</button>
+  <button id="btnImu" title="IMU가 안 잡힐 때 재연결 시도 (평상시엔 10초마다 자동 재시도됨)">🔄 IMU</button>
   <button class="primary" id="btnConnect">🔌 시리얼 연결</button>
   <button id="btnDemo">🎬 데모</button>
 </div>
@@ -608,6 +609,17 @@ function parseLine(line) {
         return;
       }
       if (record.type === 'imu') {
+        if (record.status) {   // ready / absent / unstable / zeroed
+          const msg = { ready: '🧭 IMU 연결됨', absent: '⚠ IMU 미감지 (배선 확인)',
+                        unstable: '⚠ IMU 불안정 — 움직이지 말고 재시도',
+                        zeroed: '🧭 영점 설정됨 — 지금 자세가 기준(0°)' }[record.status];
+          if (msg) setStatus('listen', msg);
+          if (record.status === 'absent' || record.status === 'unstable') {
+            curYaw = null;
+            document.getElementById('imuBadge').style.display = 'none';
+            document.getElementById('imuCard').style.display = 'none';
+          }
+        }
         // 펌웨어 5Hz yaw 스트림 — 화살표 세계좌표 고정에 사용 (yaw<0 = IMU 없음)
         if (Number.isFinite(Number(record.yaw)) && Number(record.yaw) >= 0) {
           curYaw = Number(record.yaw);
@@ -705,7 +717,16 @@ async function readLoop() {
 if (!location.protocol.startsWith('http')) {
   $('btnReg').style.display = 'none';
   $('btnZero').style.display = 'none';
+  $('btnImu').style.display = 'none';
 }
+$('btnImu').addEventListener('click', async () => {
+  setStatus('listen', '🔄 IMU 재연결 시도 중…');
+  try {
+    const r = await (await fetch('/imuretry')).json();
+    if (!r.ok) setStatus('', 'IMU 요청 실패: ' + r.error);
+    // 성공 시 곧 도착하는 imu status/yaw 메시지가 상태를 갱신함
+  } catch (e) { setStatus('', 'IMU 요청 실패: ' + e); }
+});
 $('btnZero').addEventListener('click', async () => {
   try {
     const r = await (await fetch('/zeroyaw')).json();

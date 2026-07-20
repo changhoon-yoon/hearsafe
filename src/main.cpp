@@ -193,6 +193,8 @@ static float imuReadGzDps() {
   return raw / 65.5f;                                // ±500dps 스케일
 }
 
+static void imuInit();   // 전방 선언 (imuUpdate의 자동 복구에서 사용)
+
 static void imuInit() {
   static bool wireStarted = false;
   if (!wireStarted) { Wire.begin(PIN_IMU_SDA, PIN_IMU_SCL, 400000); wireStarted = true; }
@@ -227,7 +229,18 @@ static void imuInit() {
 }
 
 static void imuUpdate() {
-  if (!imuOk) return;
+  // 자동 복구: 비활성 상태면 10초마다 조용히 재초기화 시도.
+  // (접촉이 잠깐 튀어 부팅 시 인식 실패해도 재시작 없이 스스로 살아남)
+  if (!imuOk) {
+    static uint32_t lastTry = 0;
+    uint32_t ms = millis();
+    if (ms - lastTry >= 10000) {
+      lastTry = ms;
+      uint8_t who = 0;
+      if (imuRead(0x75, &who, 1)) imuInit();   // 응답이 있을 때만 전체 초기화
+    }
+    return;
+  }
   float g = imuReadGzDps();
   uint32_t now = micros();
   float dt = (now - imuLastUs) * 1e-6f;
