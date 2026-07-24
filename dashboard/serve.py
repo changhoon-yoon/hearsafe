@@ -46,6 +46,30 @@ NET = None          # "--net host[:port]" 지정 시 (호스트, 포트) — 무
 latest_class_status = None   # 마지막 class_status JSON — 늦게 접속한 브라우저에도 전달
 classifier = None   # main에서 초기화 (없어도 서버는 정상 동작)
 
+# ---- 세션 기록/재현 (하드웨어 없이 실행 검증용) ----
+# 실제 장치에서 수신한 원본 라인을 타임스탬프와 함께 저장해두면(--record),
+# 하드웨어 없는 PC에서도 --replay로 같은 process_line() 경로를 그대로 태워
+# 방향 판정·소리 분류·경보 융합까지 동일하게 재현할 수 있다 (심사용 실행 수단).
+_record_fp = None
+_record_t0 = None
+
+
+def record_line(raw: str):
+    global _record_t0
+    if _record_fp is None:
+        return
+    if _record_t0 is None:
+        _record_t0 = time.time()
+    rec = json.dumps({"t": round(time.time() - _record_t0, 3), "raw": raw}, ensure_ascii=False)
+    _record_fp.write(rec + "\n")
+    _record_fp.flush()
+
+
+def handle_line(raw: str):
+    """장치(시리얼/무선)에서 온 원본 라인 1개: 필요 시 기록 후 공용 처리."""
+    record_line(raw)
+    process_line(raw)
+
 # ---- 분류(무슨 소리) × DOA(어느 방향) 융합 ----
 # 최근 DOA 이벤트를 기억해 두고, 위험 소리로 분류되는 순간 시간창 안의
 # 방향과 묶어 {"type":"alert"} 이벤트를 발행한다.
@@ -247,7 +271,7 @@ def net_thread():
                         break
                     raw = acc[:nl]
                     del acc[:nl + 1]
-                    process_line(raw.decode("utf-8", errors="replace").strip())
+                    handle_line(raw.decode("utf-8", errors="replace").strip())
         except Exception as e:
             ser_handle = None
             print(f"[net] {host}:{port} 재접속 대기… ({e})")
@@ -294,7 +318,7 @@ def serial_thread():
                             break
                         raw = acc[:nl]
                         del acc[:nl + 1]
-                        process_line(raw.decode("utf-8", errors="replace").strip())
+                        handle_line(raw.decode("utf-8", errors="replace").strip())
                     now = time.time()
                     if now - last_lag_check >= 5.0:
                         last_lag_check = now
@@ -306,6 +330,25 @@ def serial_thread():
             print(f"[serial] {COM} 대기 중… ({e})")
             broadcast(f"::status:: 시리얼 대기 중 ({COM} 사용 불가 — 다른 프로그램이 잡고 있나?)")
             time.sleep(2)
+
+
+def replay_thread(path: str):
+    """--record로 저장해둔 실제 세션 로그를 원래 타이밍대로 재생.
+    하드웨어(ESP32) 없이도 process_line()과 동일 경로로 방향 판정·소리
+    분류·경보 융합을 그대로 재현한다 (심사자가 실행 가능한 형태로 확인하는 용도)."""
+    print(f"[replay] 재현 세션 로드: {path}")
+    broadcast(f"::status:: 🔁 재현 모드 — 저장된 세션 재생 중 ({os.path.basename(path)})")
+    with open(path, "r", encoding="utf-8") as f:
+        lines = [json.loads(ln) for ln in f if ln.strip()]
+    t_prev = 0.0
+    for rec in lines:
+        wait = rec["t"] - t_prev
+        if wait > 0:
+            time.sleep(min(wait, 5.0))   # 개별 공백은 최대 5초로 눌러서 재생이 늘어지지 않게
+        t_prev = rec["t"]
+        process_line(rec["raw"])
+    print("[replay] 세션 재생 종료")
+    broadcast("::status:: 🔁 재현 세션 종료 (파일 끝)")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -484,6 +527,10 @@ def parse_args():
                         help="YAMNet 소리 분류 끄기 (TF 미설치 환경 등)")
     parser.add_argument("--net", default=os.getenv("DOA_NET", ""),
                         help="무선 모드: ESP32 주소 (예: doa-node.local 또는 192.168.0.50:9000)")
+    parser.add_argument("--record", default="",
+                        help="수신 원본 라인을 타임스탬프와 함께 파일로 저장 (재현용 세션 캡처)")
+    parser.add_argument("--replay", default="",
+                        help="--record로 저장한 세션 파일을 재생 (하드웨어 없이 실행 확인용, --com/--net 대신 사용)")
     return parser.parse_args()
 
 
@@ -504,7 +551,13 @@ if __name__ == "__main__":
         latest_class_status = json.dumps(
             {"type": "class_status", "ready": False, "error": "--no-classify로 꺼짐"},
             ensure_ascii=False)
-    if args.net:
+    if args.record:
+        _record_fp = open(args.record, "w", encoding="utf-8")
+        print(f"[record] 세션 기록: {args.record}")
+
+    if args.replay:
+        threading.Thread(target=replay_thread, args=(args.replay,), daemon=True).start()
+    elif args.net:
         h, _, p = args.net.partition(":")
         NET = (h, int(p) if p else 9000)
         threading.Thread(target=net_thread, daemon=True).start()
@@ -512,7 +565,8 @@ if __name__ == "__main__":
     else:
         threading.Thread(target=serial_thread, daemon=True).start()
     print("=" * 50)
-    print("  🧭 DOA 대시보드 중계 서버" + ("  (무선 모드)" if args.net else ""))
+    mode = "  (재현 모드)" if args.replay else ("  (무선 모드)" if args.net else "")
+    print("  🧭 DOA 대시보드 중계 서버" + mode)
     print(f"  PC   : http://localhost:{PORT}")
     for i, ip in enumerate(lan_ips()):
         tag = "iPad : " if i == 0 else "  또는 "

@@ -11,7 +11,7 @@
 - `src/main.cpp`: 48kHz 오디오 수집, 축별 TDOA(GCC-PHAT+온셋 정렬)와 2D 방위 계산, IMU(yaw) 융합, WiFi/USB 오디오·이벤트 스트리밍
 - `include/pins.h`: I2S 핀, 마이크 간격, 축별 지연·게인 보정값, 장착 회전 보정
 - `include/wifi_secrets.h.example`: WiFi 접속정보 템플릿 (`wifi_secrets.h`로 복사해 사용, 저장소에는 미포함)
-- `dashboard/serve.py`: 시리얼(USB) 또는 WiFi(TCP)로 들어오는 이벤트를 여러 브라우저에 SSE로 중계, YAMNet 분류·커스텀 소리 지문 매칭 관리
+- `dashboard/serve.py`: 시리얼(USB) 또는 WiFi(TCP)로 들어오는 이벤트를 여러 브라우저에 SSE로 중계, YAMNet 분류·커스텀 소리 지문 매칭 관리. `--record`/`--replay`로 세션 캡처·재생 지원(하드웨어 없이 실행 확인용)
 - `dashboard/classifier.py`: YAMNet 기반 소리 분류 + 사용자 커스텀 소리 등록(few-shot 임베딩 매칭)
 - `dashboard/doa-compass.html`: 대시보드 화면 (나침반/링/4방향 패널 3가지 뷰, 소리 등록 UI)
 - `대시보드시작.bat`: 무선(WiFi) 모드로 대시보드 서버를 바로 실행하는 단축 스크립트
@@ -50,6 +50,26 @@ python dashboard\serve.py --net doa-node.local
 또는 `대시보드시작.bat`을 그대로 실행하면 됩니다. WiFi 연결이 끊기면 자동으로 USB
 시리얼 경로로 폴백합니다. YAMNet 분류를 끄려면 `--no-classify` 옵션을 추가하세요
 (최초 실행 시 YAMNet 모델을 인터넷에서 내려받아 캐시합니다).
+
+### 재현(replay) 모드 — 하드웨어 없이 실행 확인
+
+본 제품은 안경형 IoT 센서(ESP32+마이크 4개)가 있어야 방향 감지가 되는 임베디드
+시스템이라, 실물 없이는 심사자가 직접 기기를 켤 수 없습니다. 이를 보완하기 위해
+실제 기기로 수신한 세션을 그대로 저장했다가 재생하는 모드를 제공합니다 — 시뮬레이션이
+아니라 **실제 하드웨어에서 캡처된 데이터**를 서버의 동일한 처리 경로(방향 판정 →
+소리 분류 → 경보 융합 → 대시보드 SSE)로 다시 흘려보내는 방식입니다.
+
+```powershell
+# 기기 연결 상태에서 세션 캡처 (USB 또는 --net과 함께 사용)
+python dashboard\serve.py --net doa-node.local --record demo_session.jsonl
+
+# 하드웨어 없이 캡처된 세션 재생 (심사용)
+python dashboard\serve.py --replay demo_session.jsonl
+```
+
+`--replay`는 `--com`/`--net` 대신 사용하며, 저장된 원본 이벤트를 캡처 당시와 같은
+시간 간격으로 재생합니다. 브라우저에서 `http://localhost:8765`를 열면 실제 방향
+화살표·소리 분류·경보가 그대로 재현됩니다.
 
 ## 캘리브레이션
 
