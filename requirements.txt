@@ -2,3 +2,9 @@
 numpy
 tensorflow
 tensorflow-hub
+
+# 아래는 dashboard/tutorial_yamnet.ipynb (하드웨어 없는 팀원용 YAMNet 학습 노트북) 전용.
+# serve.py 대시보드 자체는 필요 없음.
+matplotlib
+jupyter
+sounddevice   # 선택: 랩탑 마이크로 직접 녹음하고 싶을 때만. 없어도 노트북은 정상 동작

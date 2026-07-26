@@ -14,6 +14,7 @@
 - `dashboard/serve.py`: 시리얼(USB) 또는 WiFi(TCP)로 들어오는 이벤트를 여러 브라우저에 SSE로 중계, YAMNet 분류·커스텀 소리 지문 매칭 관리. `--record`/`--replay`로 세션 캡처·재생 지원(하드웨어 없이 실행 확인용)
 - `dashboard/classifier.py`: YAMNet 기반 소리 분류 + 사용자 커스텀 소리 등록(few-shot 임베딩 매칭)
 - `dashboard/doa-compass.html`: 대시보드 화면 (나침반/링/4방향 패널 3가지 뷰, 소리 등록 UI)
+- `dashboard/tutorial_yamnet.ipynb`: 하드웨어 없이 소리 분류(YAMNet)만 랩탑으로 배우는 학습 노트북 (아래 참고)
 - `대시보드시작.bat`: 무선(WiFi) 모드로 대시보드 서버를 바로 실행하는 단축 스크립트
 
 ## 빌드와 업로드
@@ -70,6 +71,21 @@ python dashboard\serve.py --replay demo_session.jsonl
 `--replay`는 `--com`/`--net` 대신 사용하며, 저장된 원본 이벤트를 캡처 당시와 같은
 시간 간격으로 재생합니다. 브라우저에서 `http://localhost:8765`를 열면 실제 방향
 화살표·소리 분류·경보가 그대로 재현됩니다.
+
+### 하드웨어 없이 YAMNet만 배우기 (팀 온보딩용)
+
+위 재현 모드가 "완성된 시스템을 심사자에게 보여주는" 용도라면, 이건 "아직 하드웨어가
+없는 팀원이 소리 분류(YAMNet) 부분을 본인 랩탑만으로 직접 만져보며 이해하는" 용도입니다.
+
+```powershell
+python -m pip install -r requirements.txt
+jupyter notebook dashboard/tutorial_yamnet.ipynb
+```
+
+테스트 사운드(`tools/`)나 랩탑 마이크 녹음으로 YAMNet 분류를 직접 돌려보고, 왜 그
+소리로 판별됐는지(점수 근거), YAMNet이 내부적으로 파형을 어떻게 처리하는지(멜
+스펙트로그램 시각화), 그리고 지금 이 프로젝트의 임계값·도메인 불일치 등 실제 튜닝
+이슈를 어떻게 개선할지 순서대로 다룹니다.
 
 ## 캘리브레이션
 
