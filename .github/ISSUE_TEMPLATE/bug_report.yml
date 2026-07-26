@@ -1,0 +1,26 @@
+name: "🐞 버그 리포트"
+description: 트랙에 상관없이 발생한 버그/오류
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 증상
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 방법
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작
+  - type: input
+    id: env
+    attributes:
+      label: 환경
+      description: OS, 펌웨어 커밋, 브랜치 등

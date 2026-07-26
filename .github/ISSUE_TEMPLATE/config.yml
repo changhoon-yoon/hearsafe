@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 팀 협업 가이드
+    url: https://github.com/changhoon-yoon/hearsafe/blob/main/CONTRIBUTING.md
+    about: 브랜치/PR 규칙, 역할별 트랙, 일정을 먼저 확인하세요

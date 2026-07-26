@@ -1,10 +1,18 @@
-# DOA Sensor Node
+# HearSafe (구 DOA Sensor Node)
 
 청각장애인 위험 소리 방향 감지 웨어러블. ESP32-S3와 INMP441 마이크 4개를 안경 프레임에
 십자 배열로 장착해 소리 방향을 360° 추정(TDOA + GCC-PHAT)하고, IMU로 착용자가 고개를
 돌려도 방향을 세계좌표로 유지하며, YAMNet으로 소리 종류(화재경보·경적·사이렌 등)를
 분류해 방향과 함께 대시보드에 표시합니다. 배경·원리·실측 성과·개발 과정의 상세 기록은
 [`docs/factsheet.md`](docs/factsheet.md)를 참고하세요.
+
+방송대 컴퓨터과학과 SW경진대회 2026 출품작. 1차 심사발표 8/7, 본선 발표 8/29.
+
+## 팀 협업
+
+- 이슈/작업은 [GitHub Issues](../../issues), 진행 현황은 [Project 보드](../../projects)에서 트래킹합니다.
+- 브랜치 전략·PR 규칙·역할별 작업 가이드는 [`CONTRIBUTING.md`](CONTRIBUTING.md)를 참고하세요.
+- `main`은 보호 브랜치입니다. 항상 새 브랜치 + PR로 작업하세요 (직접 push 금지).
 
 ## 구성
 
