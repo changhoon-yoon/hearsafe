@@ -1,0 +1,30 @@
+name: "💻 대시보드/자동화"
+description: dashboard/, 실행·배포 자동화, 재현(replay) 모드 관련
+title: "[dashboard] "
+labels: ["track:dashboard"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 작업/문제 내용
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 방법
+      description: 실행 명령어(--net/--com/--replay 등), 브라우저/OS 환경
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 결과
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 우선순위
+      options:
+        - high
+        - medium
+        - low
+    validations:
+      required: true

@@ -1,0 +1,31 @@
+name: "📊 데이터/모델"
+description: YAMNet 튜닝, 정오탐 분석, 데이터 수집·라벨링, 커스텀 소리 등록
+title: "[data] "
+labels: ["track:data"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 작업/문제 내용
+      description: 어떤 소리/클래스에 대한 것인가요? 정탐/오탐/미탐 여부를 명시해 주세요
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: 관련 데이터
+      description: 녹음 파일, custom_sounds.json 항목, YAMNet 클래스명 등
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 결과 / 판단 기준
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 우선순위
+      options:
+        - high
+        - medium
+        - low
+    validations:
+      required: true

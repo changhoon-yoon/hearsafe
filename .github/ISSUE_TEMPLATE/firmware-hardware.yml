@@ -1,0 +1,31 @@
+name: "🔧 펌웨어/하드웨어"
+description: ESP32 펌웨어, 마이크 배열, 조립·실측 관련 작업
+title: "[firmware] "
+labels: ["track:firmware"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 작업/문제 내용
+      description: 무엇을 바꾸거나 검증해야 하나요?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 실측 조건 / 재현 방법
+      description: 배선 상태, 마이크 배치, 테스트 방법(예 박수 방향, 거리) 등
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 결과
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 우선순위
+      options:
+        - high
+        - medium
+        - low
+    validations:
+      required: true

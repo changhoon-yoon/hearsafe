@@ -1,0 +1,27 @@
+name: "📝 문서/발표"
+description: 참가신청서, 발표자료(PPT), 시연 영상, 자막, 예상 QA
+title: "[docs] "
+labels: ["track:docs"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 작업 내용
+      description: 어떤 문서/자료에 대한 작업인가요? (참가신청서 / factsheet.md / PPT / 영상 스크립트 / QA 등)
+    validations:
+      required: true
+  - type: textarea
+    id: deadline
+    attributes:
+      label: 관련 마감일
+      description: 1차 심사발표(8/7) 또는 본선 발표(8/29) 중 어느 쪽 대비인가요?
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 우선순위
+      options:
+        - high
+        - medium
+        - low
+    validations:
+      required: true
