@@ -2,6 +2,7 @@
 .vscode/
 __pycache__/
 *.py[cod]
+.ipynb_checkpoints/
 tools/*.wav
 dashboard/custom_sounds.json
 dashboard/custom_clips/
