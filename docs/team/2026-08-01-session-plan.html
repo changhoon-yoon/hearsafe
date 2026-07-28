@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>HearSafe Week 1 세션 계획서</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#EDF1F1;
+    --surface:#FFFFFF;
+    --surface-2:#F3F6F6;
+    --ink:#12181B;
+    --ink-soft:#4B5A60;
+    --line:#C7D2D4;
+    --accent:#B5601F;
+    --accent-ink:#8C4415;
+    --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+
+    --font-display: "Pretendard","Apple SD Gothic Neo","Malgun Gothic","Segoe UI",system-ui,-apple-system,sans-serif;
+    --font-body: "Pretendard","Apple SD Gothic Neo","Malgun Gothic","Segoe UI",system-ui,-apple-system,sans-serif;
+    --font-mono: ui-monospace,"Cascadia Code","D2Coding","Consolas",monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#12171B; --surface:#1A2126; --surface-2:#212A30; --ink:#E8EEF0; --ink-soft:#A6B4B8; --line:#2E3A3F;
+      --accent:#E28C46; --accent-ink:#F0A868;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12171B; --surface:#1A2126; --surface-2:#212A30; --ink:#E8EEF0; --ink-soft:#A6B4B8; --line:#2E3A3F;
+    --accent:#E28C46; --accent-ink:#F0A868;
+  }
+  :root[data-theme="light"]{
+    --bg:#EDF1F1; --surface:#FFFFFF; --surface-2:#F3F6F6; --ink:#12181B; --ink-soft:#4B5A60; --line:#C7D2D4;
+    --accent:#B5601F; --accent-ink:#8C4415;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--font-body);
+    line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:840px;
+    margin:0 auto;
+    padding:44px 24px 100px;
+    display:flex;
+    flex-direction:column;
+    gap:38px;
+  }
+
+  header.top{display:flex;flex-direction:column;gap:14px;}
+  .eyebrow{
+    font-family:var(--font-mono);
+    font-size:12px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--accent-ink);
+    font-weight:600;
+  }
+  h1{
+    font-family:var(--font-display);
+    font-size:clamp(26px,4vw,34px);
+    font-weight:800;
+    margin:0;
+    letter-spacing:-.01em;
+    text-wrap:balance;
+  }
+  .lede-top{color:var(--ink-soft);font-size:15px;max-width:60ch;margin:0;}
+
+  .facts{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+  }
+  .fact{
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:9px 14px;
+    min-width:120px;
+  }
+  .fact .k{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);}
+  .fact .v{font-size:14px;font-weight:700;color:var(--ink);}
+  .fact .v.tbd{color:var(--accent-ink);font-weight:600;}
+
+  section{display:flex;flex-direction:column;gap:14px;}
+  h2{
+    font-family:var(--font-display);
+    font-size:19px;
+    font-weight:800;
+    margin:0;
+  }
+  p{margin:0;max-width:66ch;}
+  .lede{color:var(--ink-soft);font-size:14.5px;}
+
+  .panel{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:18px 20px;
+  }
+
+  /* checklist (unordered on purpose — prep items have no required order) */
+  ul.checklist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
+  ul.checklist li{
+    display:flex;
+    align-items:flex-start;
+    gap:11px;
+    font-size:14.5px;
+  }
+  ul.checklist li::before{
+    content:"";
+    flex:none;
+    width:16px;height:16px;
+    margin-top:3px;
+    border:1.5px solid var(--accent);
+    border-radius:4px;
+    background:var(--accent-wash);
+  }
+  ul.checklist b{color:var(--ink);}
+  ul.checklist span.note{color:var(--ink-soft);font-size:13px;display:block;margin-top:1px;}
+
+  /* goals list */
+  ul.goals{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
+  ul.goals li{
+    display:flex;
+    gap:11px;
+    font-size:14.5px;
+    align-items:baseline;
+  }
+  ul.goals li::before{
+    content:"→";
+    color:var(--accent-ink);
+    font-weight:800;
+    flex:none;
+  }
+
+  /* timeline table */
+  .table-scroll{overflow-x:auto;}
+  table{
+    border-collapse:collapse;
+    width:100%;
+    min-width:560px;
+    font-size:13.5px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  thead th{
+    text-align:left;
+    background:var(--surface-2);
+    color:var(--ink-soft);
+    font-family:var(--font-mono);
+    font-weight:600;
+    font-size:11px;
+    letter-spacing:.03em;
+    text-transform:uppercase;
+    padding:10px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  tbody td{
+    padding:11px 14px;
+    border-bottom:1px solid var(--line);
+    vertical-align:top;
+  }
+  tbody tr:last-child td{border-bottom:none;}
+  td.elapsed{font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--ink-soft);white-space:nowrap;}
+  td.anchor{font-family:var(--font-mono);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink-soft);font-size:12.5px;}
+  tr.cutline td{background:var(--accent-wash);}
+  tr.cutline td.elapsed, tr.cutline td.anchor{color:var(--accent-ink);font-weight:700;}
+
+  /* role cards */
+  .roles{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:12px;
+  }
+  .role{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:16px 17px;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .role .track{
+    font-family:var(--font-mono);
+    font-size:10.5px;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:var(--accent-ink);
+    font-weight:700;
+  }
+  .role .job{font-family:var(--font-display);font-weight:800;font-size:15px;}
+  .role .today{font-size:13px;color:var(--ink-soft);}
+
+  /* link card */
+  .linkcard{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:16px 20px;
+    text-decoration:none;
+    color:var(--ink);
+    transition:border-color .15s ease;
+  }
+  .linkcard:hover{border-color:var(--accent);}
+  .linkcard .lc-title{font-family:var(--font-display);font-weight:800;font-size:15px;}
+  .linkcard .lc-sub{font-size:13px;color:var(--ink-soft);margin-top:2px;}
+  .linkcard .lc-arrow{font-size:20px;color:var(--accent-ink);flex:none;}
+
+  /* milestones */
+  .milestones{display:flex;flex-direction:column;gap:0;border-left:2px solid var(--line);padding-left:18px;margin-left:4px;}
+  .milestone{position:relative;padding-bottom:16px;}
+  .milestone:last-child{padding-bottom:0;}
+  .milestone::before{
+    content:"";
+    position:absolute;
+    left:-24px;
+    top:4px;
+    width:9px;height:9px;
+    border-radius:50%;
+    background:var(--accent);
+  }
+  .milestone .date{font-family:var(--font-mono);font-size:12px;color:var(--accent-ink);font-weight:700;}
+  .milestone .what{font-size:14px;color:var(--ink);margin-top:2px;}
+
+  footer.meta{
+    font-size:12px;
+    color:var(--ink-soft);
+    border-top:1px solid var(--line);
+    padding-top:16px;
+  }
+
+  a{color:inherit;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <span class="eyebrow">HearSafe · Team Session Plan</span>
+    <h1>Week 1 — 첫 대면 킥오프 &amp; 하드웨어 조립</h1>
+    <p class="lede-top">청각장애인을 위한 저비용 방향인식+소리분류 안경형 보조기기, HearSafe. 대회는 솔로로 1차 제출을 마쳤고, 이제부터 우리 다섯이 팀으로 완성도를 끌어올립니다. 오늘은 그 첫 대면 모임 — 목표는 거창한 설명이 아니라 <b style="color:var(--ink)">각자 손으로 기기를 조립해보는 것</b>입니다.</p>
+    <div class="facts">
+      <div class="fact"><span class="k">날짜</span><span class="v">2026-08-01 (토)</span></div>
+      <div class="fact"><span class="k">시작</span><span class="v tbd">오후 · 시각 조율 중</span></div>
+      <div class="fact"><span class="k">장소</span><span class="v tbd">확정 전</span></div>
+      <div class="fact"><span class="k">오늘의 목표</span><span class="v">최소 1~2대 완주</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>오늘 우리가 할 일</h2>
+    <ul class="goals">
+      <li>리더의 완성 기기를 기준 삼아, 배선 전체 과정을 한 번 눈으로 따라간다</li>
+      <li>2인 1조로 각자 보드+마이크4개+IMU 세트를 직접 배선한다</li>
+      <li>배선이 끝난 세트는 톡톡 채널확인 → 박수 방향확인까지 실행해본다</li>
+      <li>오늘 다 못 끝낸 조는 부끄러워할 것 없이 "숙제"로 넘기고, 다음 비동기 채널에서 이어간다</li>
+      <li>마지막에 GitHub Projects를 같이 열어보고 각자 다음 액션을 등록한다</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>준비물</h2>
+    <div class="panel">
+      <ul class="checklist">
+        <li><b>노트북</b> (충전기 포함) <span class="note">대시보드 서버(serve.py) 실행 + 펌웨어 업로드용</span></li>
+        <li><b>본인 조립 세트</b> (ESP32-S3 + INMP441×4 + IMU) <span class="note">세션0에서 발주한 부품, 미수령 시 리더에게 미리 연락</span></li>
+        <li><b>점퍼선 (여러 색)</b> <span class="note">빨강(전원)·검정(GND) 최소 확보, 나머지는 색 상관없이 배선표 기준으로 연결</span></li>
+        <li><b>브레드보드 1개</b></li>
+        <li><b>USB 케이블</b> (보드 USB-C 포트용)</li>
+        <li><b>배선 설명서 미리 한 번 훑어보기</b> <span class="note">아래 링크, 당일 화면으로도 같이 볼 예정</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>타임라인</h2>
+    <p class="lede">정확한 시작 시각은 아직 조율 중이라, "경과 시간" 기준으로 짰습니다. 아래 시각은 <b style="color:var(--ink)">오후 1시 시작을 가정한 예시</b>이며, 실제 시작 시각이 정해지면 그대로 밀어서 적용하면 됩니다.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>경과</th><th>예시 시각 (13:00 시작 기준)</th><th>내용</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="elapsed">0:00–0:15</td><td class="anchor">13:00–13:15</td><td>도착, 아이스브레이킹, 오늘 목표 공유</td></tr>
+          <tr><td class="elapsed">0:15–0:45</td><td class="anchor">13:15–13:45</td><td>리더 라이브 데모 — 배선 전체 1회 시연, 채널 확인법(톡톡)·방향 확인법(박수) 안내</td></tr>
+          <tr><td class="elapsed">0:45–2:15</td><td class="anchor">13:45–15:15</td><td>페어 조립 (병렬 진행) — 하드웨어 경험자가 순회 헬퍼</td></tr>
+          <tr><td class="elapsed">2:15–2:30</td><td class="anchor">15:15–15:30</td><td>짧은 휴식 (다과)</td></tr>
+          <tr><td class="elapsed">2:30–3:30</td><td class="anchor">15:30–16:30</td><td>조립 마무리 + 개별 실행/방향 테스트</td></tr>
+          <tr class="cutline"><td class="elapsed">3:30–4:00</td><td class="anchor">16:30–17:00</td><td><b>컷라인</b> — 캘리브레이션 체크(완성 세트만), 안 된 조는 숙제화 결정</td></tr>
+          <tr><td class="elapsed">4:00–4:30</td><td class="anchor">17:00–17:30</td><td>회고, GitHub Projects 역할 등록, 8/8 세션 예고</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lede" style="font-size:12.5px">저녁 일정이 있는 팀원을 고려해 16:30(경과 3:30)을 컷라인으로 미리 공지합니다. 시간이 밀리면 이 블록부터 줄입니다.</p>
+  </section>
+
+  <section>
+    <h2>오늘의 트랙 (참고용)</h2>
+    <p class="lede">오늘은 트랙 상관없이 다 같이 조립합니다. 아래는 다음 세션부터 각자 맡을 역할을 미리 알아두는 용도입니다.</p>
+    <div class="roles">
+      <div class="role">
+        <span class="track">Hardware</span>
+        <span class="job">조립 표준화 · 축별 캘리브레이션</span>
+        <span class="today">오늘은 순회 헬퍼 역할 — 막힌 조 우선 지원</span>
+      </div>
+      <div class="role">
+        <span class="track">Full-stack (5년차)</span>
+        <span class="job">대시보드 · 펌웨어 자동화</span>
+        <span class="today">오늘은 본인 세트 독립 조립 시도</span>
+      </div>
+      <div class="role">
+        <span class="track">Data Science (6개월차)</span>
+        <span class="job">YAMNet 튜닝 · 정오탐 분석</span>
+        <span class="today">AI 입문 팀원과 페어로 조립</span>
+      </div>
+      <div class="role">
+        <span class="track">AI/ML 입문</span>
+        <span class="job">데이터 수집 · 라벨링</span>
+        <span class="today">데이터사이언스 팀원과 페어로 조립</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>배선 참고 자료</h2>
+    <a class="linkcard" href="./2026-08-01-wiring-guide.html">
+      <span>
+        <span class="lc-title">HearSafe 하드웨어 조립 배선 설명서</span>
+        <span class="lc-sub">M1~M4 배치, 핀맵, 색상 코드 배선도, 검증 절차 — 당일 화면으로 같이 봅니다</span>
+      </span>
+      <span class="lc-arrow">↗</span>
+    </a>
+  </section>
+
+  <section>
+    <h2>앞으로의 일정</h2>
+    <div class="milestones">
+      <div class="milestone"><div class="date">2026-08-08 (토)</div><div class="what">Week 2 — 캘리브레이션 실측 + 역할별 착수</div></div>
+      <div class="milestone"><div class="date">2026-08-07 (금)</div><div class="what">1차 심사발표 (리더 단독 대응 예상)</div></div>
+      <div class="milestone"><div class="date">2026-08-15 (토)</div><div class="what">Week 3 — 통합 테스트</div></div>
+      <div class="milestone"><div class="date">2026-08-22 (토)</div><div class="what">Week 4 — 발표 리허설</div></div>
+      <div class="milestone"><div class="date">2026-08-29 (토)</div><div class="what">작품전시 및 발표 (8분 설명 + 5분 QA, 대상/금상/은상/동상 후보만)</div></div>
+    </div>
+  </section>
+
+  <footer class="meta">HearSafe 팀 온보딩 · Week 1 세션 계획서 · 팀원 자격(컴퓨터과학과 주전공) 확인 후 공식 팀 등록 예정</footer>
+
+</div>
+</body>
+</html>

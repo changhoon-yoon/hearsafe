@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>HearSafe 팀 자료실</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#EDF1F1;
+    --surface:#FFFFFF;
+    --surface-2:#F3F6F6;
+    --ink:#12181B;
+    --ink-soft:#4B5A60;
+    --line:#C7D2D4;
+    --accent:#B5601F;
+    --accent-ink:#8C4415;
+    --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+
+    --font-display: "Pretendard","Apple SD Gothic Neo","Malgun Gothic","Segoe UI",system-ui,-apple-system,sans-serif;
+    --font-body: "Pretendard","Apple SD Gothic Neo","Malgun Gothic","Segoe UI",system-ui,-apple-system,sans-serif;
+    --font-mono: ui-monospace,"Cascadia Code","D2Coding","Consolas",monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#12171B; --surface:#1A2126; --surface-2:#212A30; --ink:#E8EEF0; --ink-soft:#A6B4B8; --line:#2E3A3F;
+      --accent:#E28C46; --accent-ink:#F0A868;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12171B; --surface:#1A2126; --surface-2:#212A30; --ink:#E8EEF0; --ink-soft:#A6B4B8; --line:#2E3A3F;
+    --accent:#E28C46; --accent-ink:#F0A868;
+  }
+  :root[data-theme="light"]{
+    --bg:#EDF1F1; --surface:#FFFFFF; --surface-2:#F3F6F6; --ink:#12181B; --ink-soft:#4B5A60; --line:#C7D2D4;
+    --accent:#B5601F; --accent-ink:#8C4415;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--font-body);
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:760px;
+    margin:0 auto;
+    padding:48px 24px 100px;
+    display:flex;
+    flex-direction:column;
+    gap:34px;
+  }
+  header.top{display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--line);padding-bottom:22px;}
+  .eyebrow{
+    font-family:var(--font-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent-ink);font-weight:600;
+  }
+  h1{
+    font-family:var(--font-display);font-size:clamp(26px,4vw,32px);font-weight:800;margin:0;
+    letter-spacing:-.01em;text-wrap:balance;
+  }
+  .lede-top{color:var(--ink-soft);font-size:14.5px;max-width:60ch;margin:0;}
+
+  .week{display:flex;flex-direction:column;gap:12px;}
+  .week-label{
+    font-family:var(--font-mono);font-size:12px;font-weight:700;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--accent-ink);
+  }
+  .entries{display:flex;flex-direction:column;gap:10px;}
+  a.entry{
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    background:var(--surface);border:1px solid var(--line);border-radius:12px;
+    padding:16px 20px;text-decoration:none;color:var(--ink);
+    transition:border-color .15s ease;
+  }
+  a.entry:hover{border-color:var(--accent);}
+  .e-title{font-family:var(--font-display);font-weight:800;font-size:15px;}
+  .e-sub{font-size:13px;color:var(--ink-soft);margin-top:2px;}
+  .e-arrow{font-size:20px;color:var(--accent-ink);flex:none;}
+
+  .next{
+    font-size:13px;color:var(--ink-soft);
+    border:1px dashed var(--line);border-radius:12px;padding:14px 18px;
+  }
+
+  footer.meta{font-size:12px;color:var(--ink-soft);border-top:1px solid var(--line);padding-top:16px;}
+  a{color:inherit;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <span class="eyebrow">HearSafe · Team Hub</span>
+    <h1>팀 자료실</h1>
+    <p class="lede-top">세션별 계획서·배선 설명서·참고자료를 여기에 모아둡니다. 새 세션이 끝날 때마다 업데이트됩니다.</p>
+  </header>
+
+  <div class="week">
+    <span class="week-label">Week 1 · 2026-08-01</span>
+    <div class="entries">
+      <a class="entry" href="./2026-08-01-session-plan.html">
+        <span>
+          <span class="e-title">세션 계획서</span>
+          <span class="e-sub">첫 대면 킥오프 & 하드웨어 조립 — 목표, 준비물, 타임라인, 역할 소개</span>
+        </span>
+        <span class="e-arrow">↗</span>
+      </a>
+      <a class="entry" href="./2026-08-01-wiring-guide.html">
+        <span>
+          <span class="e-title">하드웨어 조립 배선 설명서</span>
+          <span class="e-sub">M1~M4 배치, 핀맵, 색상 코드 배선도, 검증 절차</span>
+        </span>
+        <span class="e-arrow">↗</span>
+      </a>
+    </div>
+  </div>
+
+  <p class="next">Week 2 (2026-08-08) 이후 자료는 이 자리에 순서대로 추가됩니다.</p>
+
+  <footer class="meta">HearSafe 팀 온보딩 자료실 · <a href="https://github.com/changhoon-yoon/hearsafe">저장소로 돌아가기</a></footer>
+
+</div>
+</body>
+</html>
