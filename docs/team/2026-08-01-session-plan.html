@@ -15,6 +15,8 @@
     --accent:#B5601F;
     --accent-ink:#8C4415;
     --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+    --tag-mine:#2F8F5B;
+    --tag-lead:#C6372B;
 
     --font-display: "Pretendard","Apple SD Gothic Neo","Malgun Gothic","Segoe UI",system-ui,-apple-system,sans-serif;
     --font-body: "Pretendard","Apple SD Gothic Neo","Malgun Gothic","Segoe UI",system-ui,-apple-system,sans-serif;
@@ -24,15 +26,18 @@
     :root{
       --bg:#12171B; --surface:#1A2126; --surface-2:#212A30; --ink:#E8EEF0; --ink-soft:#A6B4B8; --line:#2E3A3F;
       --accent:#E28C46; --accent-ink:#F0A868;
+      --tag-mine:#6FCB93; --tag-lead:#FF6E5E;
     }
   }
   :root[data-theme="dark"]{
     --bg:#12171B; --surface:#1A2126; --surface-2:#212A30; --ink:#E8EEF0; --ink-soft:#A6B4B8; --line:#2E3A3F;
     --accent:#E28C46; --accent-ink:#F0A868;
+    --tag-mine:#6FCB93; --tag-lead:#FF6E5E;
   }
   :root[data-theme="light"]{
     --bg:#EDF1F1; --surface:#FFFFFF; --surface-2:#F3F6F6; --ink:#12181B; --ink-soft:#4B5A60; --line:#C7D2D4;
     --accent:#B5601F; --accent-ink:#8C4415;
+    --tag-mine:#2F8F5B; --tag-lead:#C6372B;
   }
 
   *{box-sizing:border-box;}
@@ -121,12 +126,20 @@
     flex:none;
     width:16px;height:16px;
     margin-top:3px;
-    border:1.5px solid var(--accent);
+    border:1.5px solid var(--line);
     border-radius:4px;
-    background:var(--accent-wash);
+    background:var(--surface-2);
   }
+  ul.checklist li.mine::before{border-color:var(--tag-mine);background:color-mix(in srgb, var(--tag-mine) 16%, transparent);}
+  ul.checklist li.lead::before{border-color:var(--tag-lead);background:color-mix(in srgb, var(--tag-lead) 16%, transparent);}
   ul.checklist b{color:var(--ink);}
   ul.checklist span.note{color:var(--ink-soft);font-size:13px;display:block;margin-top:1px;}
+  .tagpill{
+    font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;padding:1px 8px;border-radius:99px;margin-left:8px;white-space:nowrap;
+  }
+  .tagpill.mine{color:var(--tag-mine);background:color-mix(in srgb, var(--tag-mine) 14%, transparent);border:1px solid color-mix(in srgb, var(--tag-mine) 40%, transparent);}
+  .tagpill.lead{color:var(--tag-lead);background:color-mix(in srgb, var(--tag-lead) 14%, transparent);border:1px solid color-mix(in srgb, var(--tag-lead) 40%, transparent);}
 
   /* goals list */
   ul.goals{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
@@ -258,7 +271,7 @@
     <h1>Week 1 — 첫 대면 킥오프 &amp; 하드웨어 조립</h1>
     <p class="lede-top">청각장애인을 위한 저비용 방향인식+소리분류 안경형 보조기기, HearSafe. 대회는 솔로로 1차 제출을 마쳤고, 이제부터 우리 다섯이 팀으로 완성도를 끌어올립니다. 오늘은 그 첫 대면 모임 — 목표는 거창한 설명이 아니라 <b style="color:var(--ink)">각자 손으로 기기를 조립해보는 것</b>입니다.</p>
     <div class="facts">
-      <div class="fact"><span class="k">날짜</span><span class="v">2026-08-01 (토)</span></div>
+      <div class="fact"><span class="k">날짜</span><span class="v tbd">8/1(토) 또는 8/2(일) · 조율 중</span></div>
       <div class="fact"><span class="k">시작</span><span class="v tbd">오후 · 시각 조율 중</span></div>
       <div class="fact"><span class="k">장소</span><span class="v tbd">확정 전</span></div>
       <div class="fact"><span class="k">오늘의 목표</span><span class="v">최소 1~2대 완주</span></div>
@@ -269,23 +282,24 @@
     <h2>오늘 우리가 할 일</h2>
     <ul class="goals">
       <li>리더의 완성 기기를 기준 삼아, 배선 전체 과정을 한 번 눈으로 따라간다</li>
-      <li>2인 1조로 각자 보드+마이크4개+IMU 세트를 직접 배선한다</li>
+      <li>4명 각자 보드+마이크4개+IMU 세트를 직접 배선한다</li>
       <li>배선이 끝난 세트는 톡톡 채널확인 → 박수 방향확인까지 실행해본다</li>
-      <li>오늘 다 못 끝낸 조는 부끄러워할 것 없이 "숙제"로 넘기고, 다음 비동기 채널에서 이어간다</li>
+      <li>오늘 다 못 끝낸 사람은 숙제로 넘기고, 다음 비동기 채널에서 이어간다</li>
       <li>마지막에 GitHub Projects를 같이 열어보고 각자 다음 액션을 등록한다</li>
     </ul>
   </section>
 
   <section>
     <h2>준비물</h2>
+    <p class="lede" style="font-size:12.5px"><span class="tagpill mine" style="margin-left:0">직접 준비</span> 각자 챙겨오는 것 · <span class="tagpill lead">리더 준비</span> 제가 당일 준비해가는 것</p>
     <div class="panel">
       <ul class="checklist">
-        <li><b>노트북</b> (충전기 포함) <span class="note">대시보드 서버(serve.py) 실행 + 펌웨어 업로드용</span></li>
-        <li><b>본인 조립 세트</b> (ESP32-S3 + INMP441×4 + IMU) <span class="note">세션0에서 발주한 부품, 미수령 시 리더에게 미리 연락</span></li>
-        <li><b>점퍼선 (여러 색)</b> <span class="note">빨강(전원)·검정(GND) 최소 확보, 나머지는 색 상관없이 배선표 기준으로 연결</span></li>
-        <li><b>브레드보드 1개</b></li>
-        <li><b>USB 케이블</b> (보드 USB-C 포트용)</li>
-        <li><b>배선 설명서 미리 한 번 훑어보기</b> <span class="note">아래 링크, 당일 화면으로도 같이 볼 예정</span></li>
+        <li class="mine"><b>노트북</b> (충전기 포함) <span class="tagpill mine">직접 준비</span><span class="note">대시보드 서버(serve.py) 실행 + 펌웨어 업로드용</span></li>
+        <li class="mine"><b>USB 케이블</b> (Type-C) <span class="tagpill mine">직접 준비</span><span class="note">보드 USB-C 포트용</span></li>
+        <li class="mine"><b>배선 설명서 한 번 훑어보기</b> <span class="tagpill mine">직접 준비</span><span class="note">아래 링크, 당일 화면으로도 같이 볼 예정</span></li>
+        <li class="lead"><b>조립 세트</b> (ESP32-S3 + INMP441×4 + IMU) <span class="tagpill lead">리더 준비</span><span class="note">당일 현장에서 인원수만큼 배부</span></li>
+        <li class="lead"><b>점퍼선 (여러 색)</b> <span class="tagpill lead">리더 준비</span><span class="note">빨강(전원)·검정(GND) 포함, 나머지는 배선표 기준으로 연결</span></li>
+        <li class="lead"><b>브레드보드</b> (인당 1개) <span class="tagpill lead">리더 준비</span></li>
       </ul>
     </div>
   </section>
@@ -301,10 +315,10 @@
         <tbody>
           <tr><td class="elapsed">0:00–0:15</td><td class="anchor">13:00–13:15</td><td>도착, 아이스브레이킹, 오늘 목표 공유</td></tr>
           <tr><td class="elapsed">0:15–0:45</td><td class="anchor">13:15–13:45</td><td>리더 라이브 데모 — 배선 전체 1회 시연, 채널 확인법(톡톡)·방향 확인법(박수) 안내</td></tr>
-          <tr><td class="elapsed">0:45–2:15</td><td class="anchor">13:45–15:15</td><td>페어 조립 (병렬 진행) — 하드웨어 경험자가 순회 헬퍼</td></tr>
+          <tr><td class="elapsed">0:45–2:15</td><td class="anchor">13:45–15:15</td><td>개별 조립 (4명 각자 병렬 진행) — 하드웨어 경험자가 순회 헬퍼</td></tr>
           <tr><td class="elapsed">2:15–2:30</td><td class="anchor">15:15–15:30</td><td>짧은 휴식 (다과)</td></tr>
           <tr><td class="elapsed">2:30–3:30</td><td class="anchor">15:30–16:30</td><td>조립 마무리 + 개별 실행/방향 테스트</td></tr>
-          <tr class="cutline"><td class="elapsed">3:30–4:00</td><td class="anchor">16:30–17:00</td><td><b>컷라인</b> — 캘리브레이션 체크(완성 세트만), 안 된 조는 숙제화 결정</td></tr>
+          <tr class="cutline"><td class="elapsed">3:30–4:00</td><td class="anchor">16:30–17:00</td><td><b>컷라인</b> — 캘리브레이션 체크(완성한 사람만), 안 된 사람은 숙제화 결정</td></tr>
           <tr><td class="elapsed">4:00–4:30</td><td class="anchor">17:00–17:30</td><td>회고, GitHub Projects 역할 등록, 8/8 세션 예고</td></tr>
         </tbody>
       </table>
@@ -319,7 +333,7 @@
       <div class="role">
         <span class="track">Hardware</span>
         <span class="job">조립 표준화 · 축별 캘리브레이션</span>
-        <span class="today">오늘은 순회 헬퍼 역할 — 막힌 조 우선 지원</span>
+        <span class="today">오늘은 순회 헬퍼 역할 — 막힌 사람 우선 지원</span>
       </div>
       <div class="role">
         <span class="track">Full-stack (5년차)</span>
@@ -329,12 +343,12 @@
       <div class="role">
         <span class="track">Data Science (6개월차)</span>
         <span class="job">YAMNet 튜닝 · 정오탐 분석</span>
-        <span class="today">AI 입문 팀원과 페어로 조립</span>
+        <span class="today">본인 세트 개별 조립</span>
       </div>
       <div class="role">
         <span class="track">AI/ML 입문</span>
         <span class="job">데이터 수집 · 라벨링</span>
-        <span class="today">데이터사이언스 팀원과 페어로 조립</span>
+        <span class="today">본인 세트 개별 조립</span>
       </div>
     </div>
   </section>
