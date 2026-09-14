@@ -1,5 +1,9 @@
 # HearSafe (구 DOA Sensor Node)
 
+<p align="center"><img src="docs/images/hearsafe-glasses-frame.jpg" width="420" alt="HearSafe prototype: four INMP441 microphones on a glasses frame with the ESP32-S3 on the temple"></p>
+
+*안경 프레임 십자 배열 프로토타입 — 마이크 4개(INMP441)와 ESP32-S3 / Glasses-frame prototype: four INMP441 mics in a cross with the ESP32-S3.*
+
 청각장애인 위험 소리 방향 감지 웨어러블. ESP32-S3와 INMP441 마이크 4개를 안경 프레임에
 십자 배열로 장착해 소리 방향을 360° 추정(TDOA + GCC-PHAT)하고, IMU로 착용자가 고개를
 돌려도 방향을 세계좌표로 유지하며, YAMNet으로 소리 종류(화재경보·경적·사이렌 등)를
